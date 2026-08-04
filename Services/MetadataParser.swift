@@ -218,8 +218,8 @@ nonisolated enum MetadataParser {
     private static func readComicInfoXML(from archiveURL: URL) -> String? {
         guard let format = ComicArchive.Format(fileExtension: archiveURL.pathExtension) else { return nil }
 
-        switch format {
-        case .cbz:
+        switch format.backend {
+        case .zipFoundation:
             guard let archive = try? Archive(url: archiveURL, accessMode: .read) else { return nil }
             for entry in archive where entry.type == .file {
                 let name = (entry.path as NSString).lastPathComponent.lowercased()
@@ -230,19 +230,22 @@ nonisolated enum MetadataParser {
             }
             return nil
 
-        case .cbr:
-            guard let unrar = Bundle.main.url(forResource: "unrar", withExtension: nil) else { return nil }
-            let process = Process()
-            process.executableURL = unrar
-            process.arguments = ["p", "-inul", archiveURL.path, "ComicInfo.xml"]
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = Pipe()
-            guard (try? process.run()) != nil else { return nil }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0, !data.isEmpty else { return nil }
+        case .unrar:
+            guard let unrar = Bundle.main.url(forResource: "unrar", withExtension: nil),
+                  let data = ArchiveSupport.run(
+                    unrar, ["p", "-inul", archiveURL.path, "ComicInfo.xml"]
+                  ), !data.isEmpty else { return nil }
             return String(data: data, encoding: .utf8)
+
+        case .bsdtar:
+            let tar = URL(fileURLWithPath: "/usr/bin/tar")
+            guard let data = ArchiveSupport.run(
+                tar, ["-xOf", archiveURL.path, "ComicInfo.xml"]
+            ), !data.isEmpty else { return nil }
+            return String(data: data, encoding: .utf8)
+
+        case .pdfKit:
+            return nil   // PDFs carry their own metadata, not ComicInfo.xml
         }
     }
 

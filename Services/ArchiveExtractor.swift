@@ -1,7 +1,10 @@
 import Foundation
 import ZIPFoundation
+import PDFKit
+import ImageIO
+import UniformTypeIdentifiers
+import AppKit
 
-/// Extraction is behind a protocol so CBZ and CBR stay independently swappable.
 protocol ArchiveExtractor {
     func extractPages(from archiveURL: URL) throws -> [ComicPage]
     func pageCount(of archiveURL: URL) throws -> Int
@@ -17,28 +20,29 @@ enum ArchiveError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unsupportedFormat(let ext): return "Unsupported archive format: .\(ext)"
+        case .unsupportedFormat(let ext): return "Unsupported format: .\(ext)"
         case .extractionFailed(let detail): return "Extraction failed: \(detail)"
         case .unrarNotFound: return "Bundled unrar binary not found."
-        case .emptyArchive: return "Archive contains no readable images."
+        case .emptyArchive: return "No readable pages found."
         }
     }
 }
 
 nonisolated enum ArchiveSupport {
-    static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "webp", "gif", "bmp"]
+    static let imageExtensions: Set<String> = [
+        "jpg", "jpeg", "jpe", "png", "webp", "gif", "bmp", "tif", "tiff", "heic", "avif",
+    ]
 
     static func isImage(_ url: URL) -> Bool {
-        imageExtensions.contains(url.pathExtension.lowercased())
+        isImageName(url.lastPathComponent)
     }
 
     static func isImageName(_ name: String) -> Bool {
         let base = (name as NSString).lastPathComponent
-        guard !base.hasPrefix("."), !base.hasPrefix("__MACOSX") else { return false }
+        guard !base.hasPrefix("."), !name.contains("__MACOSX") else { return false }
         return imageExtensions.contains((base as NSString).pathExtension.lowercased())
     }
 
-    /// Natural sort so "page2" < "page10".
     static func sortedByName(_ urls: [URL]) -> [URL] {
         urls.sorted {
             $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
@@ -56,6 +60,34 @@ nonisolated enum ArchiveSupport {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
+
+    /// Images anywhere under a directory — archives often nest pages in a folder.
+    static func imagesRecursively(in dir: URL) -> [URL] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        ) else { return [] }
+        var found: [URL] = []
+        for case let url as URL in enumerator where isImage(url) {
+            found.append(url)
+        }
+        return sortedByName(found)
+    }
+
+    /// Runs a command and returns stdout, or nil on non-zero exit.
+    @discardableResult
+    static func run(_ executable: URL, _ arguments: [String]) -> Data? {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+
+        guard (try? process.run()) != nil else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return process.terminationStatus == 0 ? data : nil
+    }
 }
 
 nonisolated struct ArchiveExtractorRouter {
@@ -63,14 +95,16 @@ nonisolated struct ArchiveExtractorRouter {
         guard let format = ComicArchive.Format(fileExtension: url.pathExtension) else {
             throw ArchiveError.unsupportedFormat(url.pathExtension)
         }
-        switch format {
-        case .cbz: return CBZExtractor()
-        case .cbr: return CBRExtractor()
+        switch format.backend {
+        case .zipFoundation: return CBZExtractor()
+        case .unrar: return CBRExtractor()
+        case .bsdtar: return BSDTarExtractor()
+        case .pdfKit: return PDFExtractor()
         }
     }
 }
 
-// MARK: - CBZ (ZIP) — via ZIPFoundation
+// MARK: - ZIP (cbz, zip)
 
 nonisolated struct CBZExtractor: ArchiveExtractor {
     func extractPages(from archiveURL: URL) throws -> [ComicPage] {
@@ -89,9 +123,8 @@ nonisolated struct CBZExtractor: ArchiveExtractor {
         }
 
         guard !extracted.isEmpty else { throw ArchiveError.emptyArchive }
-
-        return ArchiveSupport.sortedByName(extracted).enumerated().map { index, url in
-            ComicPage(index: index, imageURL: url)
+        return ArchiveSupport.sortedByName(extracted).enumerated().map {
+            ComicPage(index: $0.offset, imageURL: $0.element)
         }
     }
 
@@ -106,24 +139,22 @@ nonisolated struct CBZExtractor: ArchiveExtractor {
 
     func coverImageData(from archiveURL: URL) throws -> Data {
         let archive = try Archive(url: archiveURL, accessMode: .read)
-
         var imageEntries: [(name: String, entry: Entry)] = []
         for entry in archive where entry.type == .file {
             guard ArchiveSupport.isImageName(entry.path) else { continue }
             imageEntries.append((entry.path, entry))
         }
         guard !imageEntries.isEmpty else { throw ArchiveError.emptyArchive }
-
         imageEntries.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
 
         var data = Data()
-        _ = try archive.extract(imageEntries[0].entry) { chunk in data.append(chunk) }
+        _ = try archive.extract(imageEntries[0].entry) { data.append($0) }
         guard !data.isEmpty else { throw ArchiveError.emptyArchive }
         return data
     }
 }
 
-// MARK: - CBR (RAR) — shells out to the bundled unrar binary
+// MARK: - RAR (cbr, rar) — bundled unrar
 
 nonisolated struct CBRExtractor: ArchiveExtractor {
     private var unrarURL: URL? {
@@ -134,25 +165,15 @@ nonisolated struct CBRExtractor: ArchiveExtractor {
         guard let unrar = unrarURL else { throw ArchiveError.unrarNotFound }
         let workDir = try ArchiveSupport.workingDirectory(for: archiveURL)
 
-        let process = Process()
-        process.executableURL = unrar
-        process.arguments = ["e", "-o+", "-inul", archiveURL.path, workDir.path + "/"]
-        try process.run()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else {
-            throw ArchiveError.extractionFailed("unrar exited with status \(process.terminationStatus)")
+        guard ArchiveSupport.run(
+            unrar, ["e", "-o+", "-inul", archiveURL.path, workDir.path + "/"]
+        ) != nil else {
+            throw ArchiveError.extractionFailed("unrar failed")
         }
 
-        let contents = try FileManager.default.contentsOfDirectory(
-            at: workDir, includingPropertiesForKeys: nil
-        ).filter(ArchiveSupport.isImage)
-
+        let contents = ArchiveSupport.imagesRecursively(in: workDir)
         guard !contents.isEmpty else { throw ArchiveError.emptyArchive }
-
-        return ArchiveSupport.sortedByName(contents).enumerated().map { index, url in
-            ComicPage(index: index, imageURL: url)
-        }
+        return contents.enumerated().map { ComicPage(index: $0.offset, imageURL: $0.element) }
     }
 
     func pageCount(of archiveURL: URL) throws -> Int {
@@ -161,52 +182,170 @@ nonisolated struct CBRExtractor: ArchiveExtractor {
 
     func coverImageData(from archiveURL: URL) throws -> Data {
         guard let unrar = unrarURL else { throw ArchiveError.unrarNotFound }
-        let names = try listImageNames(in: archiveURL)
-        guard let first = names.first else { throw ArchiveError.emptyArchive }
-
-        let process = Process()
-        process.executableURL = unrar
-        // p = print a single file to stdout — no unpacking the rest.
-        process.arguments = ["p", "-inul", archiveURL.path, first]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        try process.run()
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0, !data.isEmpty else {
+        guard let first = try listImageNames(in: archiveURL).first else {
+            throw ArchiveError.emptyArchive
+        }
+        guard let data = ArchiveSupport.run(unrar, ["p", "-inul", archiveURL.path, first]),
+              !data.isEmpty else {
             throw ArchiveError.extractionFailed("unrar couldn't read the cover")
         }
         return data
     }
 
-    /// Bare listing of image entries, natural-sorted.
     private func listImageNames(in archiveURL: URL) throws -> [String] {
         guard let unrar = unrarURL else { throw ArchiveError.unrarNotFound }
-
-        let process = Process()
-        process.executableURL = unrar
-        process.arguments = ["lb", archiveURL.path]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        try process.run()
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0,
+        guard let data = ArchiveSupport.run(unrar, ["lb", archiveURL.path]),
               let output = String(data: data, encoding: .utf8) else {
             throw ArchiveError.extractionFailed("unrar list failed")
         }
+        return ArchiveSupport.sortedNames(
+            output.split(separator: "\n")
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { ArchiveSupport.isImageName($0) }
+        )
+    }
+}
 
-        let names = output
-            .split(separator: "\n")
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { ArchiveSupport.isImageName($0) }
+// MARK: - 7z / tar — macOS bsdtar (libarchive), no bundled binary needed
 
-        return ArchiveSupport.sortedNames(names)
+nonisolated struct BSDTarExtractor: ArchiveExtractor {
+    private let tar = URL(fileURLWithPath: "/usr/bin/tar")
+
+    func extractPages(from archiveURL: URL) throws -> [ComicPage] {
+        let workDir = try ArchiveSupport.workingDirectory(for: archiveURL)
+
+        guard ArchiveSupport.run(
+            tar, ["-xf", archiveURL.path, "-C", workDir.path]
+        ) != nil else {
+            throw ArchiveError.extractionFailed("Couldn't read \(archiveURL.pathExtension) archive")
+        }
+
+        let contents = ArchiveSupport.imagesRecursively(in: workDir)
+        guard !contents.isEmpty else { throw ArchiveError.emptyArchive }
+        return contents.enumerated().map { ComicPage(index: $0.offset, imageURL: $0.element) }
+    }
+
+    func pageCount(of archiveURL: URL) throws -> Int {
+        try listImageNames(in: archiveURL).count
+    }
+
+    func coverImageData(from archiveURL: URL) throws -> Data {
+        guard let first = try listImageNames(in: archiveURL).first else {
+            throw ArchiveError.emptyArchive
+        }
+        // Extract just the one entry to a scratch dir.
+        let scratch = try ArchiveSupport.workingDirectory(for: archiveURL)
+            .appendingPathComponent("__cover", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+
+        guard ArchiveSupport.run(
+            tar, ["-xf", archiveURL.path, "-C", scratch.path, first]
+        ) != nil else {
+            throw ArchiveError.extractionFailed("Couldn't extract cover")
+        }
+
+        guard let coverURL = ArchiveSupport.imagesRecursively(in: scratch).first,
+              let data = try? Data(contentsOf: coverURL), !data.isEmpty else {
+            throw ArchiveError.emptyArchive
+        }
+        return data
+    }
+
+    private func listImageNames(in archiveURL: URL) throws -> [String] {
+        guard let data = ArchiveSupport.run(tar, ["-tf", archiveURL.path]),
+              let output = String(data: data, encoding: .utf8) else {
+            throw ArchiveError.extractionFailed("Couldn't list archive")
+        }
+        return ArchiveSupport.sortedNames(
+            output.split(separator: "\n")
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { ArchiveSupport.isImageName($0) }
+        )
+    }
+}
+
+// MARK: - PDF — PDFKit renders pages to images
+
+nonisolated struct PDFExtractor: ArchiveExtractor {
+    /// Long edge of rendered pages. High enough to zoom into, cheap enough to cache.
+    private let renderLongEdge: CGFloat = 2200
+
+    func extractPages(from archiveURL: URL) throws -> [ComicPage] {
+        guard let document = PDFDocument(url: archiveURL) else {
+            throw ArchiveError.extractionFailed("Couldn't open PDF")
+        }
+        let workDir = try ArchiveSupport.workingDirectory(for: archiveURL)
+        var pages: [ComicPage] = []
+
+        for index in 0..<document.pageCount {
+            let dest = workDir.appendingPathComponent(String(format: "page%04d.jpg", index))
+
+            // Re-use previously rendered pages.
+            if !FileManager.default.fileExists(atPath: dest.path) {
+                guard let page = document.page(at: index) else { continue }
+                try render(page: page, to: dest)
+            }
+            pages.append(ComicPage(index: pages.count, imageURL: dest))
+        }
+
+        guard !pages.isEmpty else { throw ArchiveError.emptyArchive }
+        return pages
+    }
+
+    func pageCount(of archiveURL: URL) throws -> Int {
+        guard let document = PDFDocument(url: archiveURL) else {
+            throw ArchiveError.extractionFailed("Couldn't open PDF")
+        }
+        return document.pageCount
+    }
+
+    func coverImageData(from archiveURL: URL) throws -> Data {
+        guard let document = PDFDocument(url: archiveURL),
+              let page = document.page(at: 0) else {
+            throw ArchiveError.emptyArchive
+        }
+        return try renderData(page: page, longEdge: 800)
+    }
+
+    // MARK: - Rendering
+
+    private func render(page: PDFPage, to destination: URL) throws {
+        let data = try renderData(page: page, longEdge: renderLongEdge)
+        try data.write(to: destination)
+    }
+
+    private func renderData(page: PDFPage, longEdge: CGFloat) throws -> Data {
+        let bounds = page.bounds(for: .mediaBox)
+        guard bounds.width > 0, bounds.height > 0 else {
+            throw ArchiveError.extractionFailed("Empty PDF page")
+        }
+
+        let scale = longEdge / max(bounds.width, bounds.height)
+        let pixelSize = CGSize(
+            width: max(bounds.width * scale, 1),
+            height: max(bounds.height * scale, 1)
+        )
+
+        let image = NSImage(size: pixelSize)
+        image.lockFocus()
+        NSColor.white.setFill()
+        NSRect(origin: .zero, size: pixelSize).fill()
+        if let ctx = NSGraphicsContext.current?.cgContext {
+            ctx.saveGState()
+            ctx.scaleBy(x: scale, y: scale)
+            ctx.translateBy(x: -bounds.origin.x, y: -bounds.origin.y)
+            page.draw(with: .mediaBox, to: ctx)
+            ctx.restoreGState()
+        }
+        image.unlockFocus()
+
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let jpeg = bitmap.representation(
+                using: .jpeg, properties: [.compressionFactor: 0.85]
+              ) else {
+            throw ArchiveError.extractionFailed("Couldn't render PDF page")
+        }
+        return jpeg
     }
 }
