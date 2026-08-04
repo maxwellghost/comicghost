@@ -1,4 +1,4 @@
-# Comic Ghost 👻
+# Comic Ghost
 
 A native macOS comic reader for local collections. Built with Swift and SwiftUI, themed in Catppuccin Mocha.
 
