@@ -1,0 +1,517 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		E625A7E73021367A00E7ADEB /* ComicGhostApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E625A7CA3021367A00E7ADEB /* ComicGhostApp.swift */; };
+		E625A7ED3021367A00E7ADEB /* FolderWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = E625A7D23021367A00E7ADEB /* FolderWatcher.swift */; };
+		E625A7F4302136EC00E7ADEB /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = E625A7F3302136EC00E7ADEB /* ZIPFoundation */; };
+		E625A7F63021374900E7ADEB /* unrar in Resources */ = {isa = PBXBuildFile; fileRef = E625A7F53021374900E7ADEB /* unrar */; };
+		E6765B2B30219EB2000A5807 /* LibraryItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6765B2A30219EB2000A5807 /* LibraryItem.swift */; };
+		E6765B3330219F98000A5807 /* LibraryIngest.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6765B3230219F98000A5807 /* LibraryIngest.swift */; };
+		E6848229302192AF00690FF3 /* SmartCollectionEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6848228302192AF00690FF3 /* SmartCollectionEditor.swift */; };
+		E684822B302192C700690FF3 /* ModelContainerSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = E684822A302192C700690FF3 /* ModelContainerSetup.swift */; };
+		E68482333021933F00690FF3 /* SmartCollection.swift in Sources */ = {isa = PBXBuildFile; fileRef = E68482323021933F00690FF3 /* SmartCollection.swift */; };
+		E6985A5730219CA600551BF6 /* MetadataParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6985A5630219CA600551BF6 /* MetadataParser.swift */; };
+		E6D3126F3021AA04007D223C /* ReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6D3126E3021AA04007D223C /* ReaderView.swift */; };
+		E6D312713021AA15007D223C /* PageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6D312703021AA15007D223C /* PageView.swift */; };
+		E6D312733021AA23007D223C /* PageStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6D312723021AA23007D223C /* PageStrip.swift */; };
+		E6D312753021AA32007D223C /* ControlsLegend.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6D312743021AA32007D223C /* ControlsLegend.swift */; };
+		E6D312773021AA41007D223C /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6D312763021AA41007D223C /* LibraryView.swift */; };
+		E6D312793021AA54007D223C /* LibraryItemCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6D312783021AA54007D223C /* LibraryItemCell.swift */; };
+		E6D3127D3021AB31007D223C /* SeriesCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6D3127C3021AB31007D223C /* SeriesCard.swift */; };
+		E6F87E5430213C1400E16DFF /* ComicArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F87E5330213C1400E16DFF /* ComicArchive.swift */; };
+		E6F87E5630213C1B00E16DFF /* ReadingProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F87E5530213C1B00E16DFF /* ReadingProgress.swift */; };
+		E6F87E7E302153F100E16DFF /* ArchiveExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F87E7D302153F100E16DFF /* ArchiveExtractor.swift */; };
+		E6F87E803021540100E16DFF /* ThumbnailGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F87E7F3021540100E16DFF /* ThumbnailGenerator.swift */; };
+		E6F87E8B30215E5C00E16DFF /* WatchedFolder.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F87E8A30215E5C00E16DFF /* WatchedFolder.swift */; };
+		E6F87EAB302173B000E16DFF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E6F87EAA302173B000E16DFF /* Assets.xcassets */; };
+		E6F87EC330217CE100E16DFF /* RatingViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F87EC230217CE100E16DFF /* RatingViews.swift */; };
+		E6F87ECF30217D5400E16DFF /* StatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F87ECE30217D5400E16DFF /* StatsView.swift */; };
+		E6F87ED33021895B00E16DFF /* GhostArt.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F87ED23021895B00E16DFF /* GhostArt.swift */; };
+		E6F87ED73021897F00E16DFF /* CGTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F87ED63021897F00E16DFF /* CGTheme.swift */; };
+		E6F87ED9302189A300E16DFF /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F87ED8302189A300E16DFF /* ImageCache.swift */; };
+		E6F87EDB302189BA00E16DFF /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F87EDA302189BA00E16DFF /* SettingsView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		E625A7BC3021360E00E7ADEB /* ComicGhost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ComicGhost.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E625A7CA3021367A00E7ADEB /* ComicGhostApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComicGhostApp.swift; sourceTree = "<group>"; };
+		E625A7D23021367A00E7ADEB /* FolderWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderWatcher.swift; sourceTree = "<group>"; };
+		E625A7F53021374900E7ADEB /* unrar */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; path = unrar; sourceTree = "<group>"; };
+		E6765B2A30219EB2000A5807 /* LibraryItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryItem.swift; sourceTree = "<group>"; };
+		E6765B3230219F98000A5807 /* LibraryIngest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryIngest.swift; sourceTree = "<group>"; };
+		E6848228302192AF00690FF3 /* SmartCollectionEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartCollectionEditor.swift; sourceTree = "<group>"; };
+		E684822A302192C700690FF3 /* ModelContainerSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelContainerSetup.swift; sourceTree = "<group>"; };
+		E68482323021933F00690FF3 /* SmartCollection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartCollection.swift; sourceTree = "<group>"; };
+		E6985A5630219CA600551BF6 /* MetadataParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetadataParser.swift; sourceTree = "<group>"; };
+		E6D3126E3021AA04007D223C /* ReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderView.swift; sourceTree = "<group>"; };
+		E6D312703021AA15007D223C /* PageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageView.swift; sourceTree = "<group>"; };
+		E6D312723021AA23007D223C /* PageStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageStrip.swift; sourceTree = "<group>"; };
+		E6D312743021AA32007D223C /* ControlsLegend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlsLegend.swift; sourceTree = "<group>"; };
+		E6D312763021AA41007D223C /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
+		E6D312783021AA54007D223C /* LibraryItemCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryItemCell.swift; sourceTree = "<group>"; };
+		E6D3127C3021AB31007D223C /* SeriesCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeriesCard.swift; sourceTree = "<group>"; };
+		E6F87E5330213C1400E16DFF /* ComicArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComicArchive.swift; sourceTree = "<group>"; };
+		E6F87E5530213C1B00E16DFF /* ReadingProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingProgress.swift; sourceTree = "<group>"; };
+		E6F87E7D302153F100E16DFF /* ArchiveExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveExtractor.swift; sourceTree = "<group>"; };
+		E6F87E7F3021540100E16DFF /* ThumbnailGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailGenerator.swift; sourceTree = "<group>"; };
+		E6F87E8A30215E5C00E16DFF /* WatchedFolder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchedFolder.swift; sourceTree = "<group>"; };
+		E6F87EAA302173B000E16DFF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		E6F87EC230217CE100E16DFF /* RatingViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RatingViews.swift; sourceTree = "<group>"; };
+		E6F87ECE30217D5400E16DFF /* StatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsView.swift; sourceTree = "<group>"; };
+		E6F87ED23021895B00E16DFF /* GhostArt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhostArt.swift; sourceTree = "<group>"; };
+		E6F87ED63021897F00E16DFF /* CGTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CGTheme.swift; sourceTree = "<group>"; };
+		E6F87ED8302189A300E16DFF /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
+		E6F87EDA302189BA00E16DFF /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		E625A7B93021360E00E7ADEB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E625A7F4302136EC00E7ADEB /* ZIPFoundation in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		E625A7B33021360E00E7ADEB = {
+			isa = PBXGroup;
+			children = (
+				E6F87EAA302173B000E16DFF /* Assets.xcassets */,
+				E625A7BD3021360E00E7ADEB /* Products */,
+				E625A7CA3021367A00E7ADEB /* ComicGhostApp.swift */,
+				E625A7D03021367A00E7ADEB /* Persistence */,
+				E625A7D63021367A00E7ADEB /* Services */,
+				E625A7D83021367A00E7ADEB /* Theme */,
+				E625A7F53021374900E7ADEB /* unrar */,
+				E6F87E4830213B5600E16DFF /* Models */,
+				E6F87E4E30213B5600E16DFF /* Views */,
+			);
+			sourceTree = "<group>";
+		};
+		E625A7BD3021360E00E7ADEB /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				E625A7BC3021360E00E7ADEB /* ComicGhost.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		E625A7D03021367A00E7ADEB /* Persistence */ = {
+			isa = PBXGroup;
+			children = (
+				E684822A302192C700690FF3 /* ModelContainerSetup.swift */,
+			);
+			path = Persistence;
+			sourceTree = "<group>";
+		};
+		E625A7D63021367A00E7ADEB /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				E625A7D23021367A00E7ADEB /* FolderWatcher.swift */,
+				E6F87E7D302153F100E16DFF /* ArchiveExtractor.swift */,
+				E6F87E7F3021540100E16DFF /* ThumbnailGenerator.swift */,
+				E6F87E8A30215E5C00E16DFF /* WatchedFolder.swift */,
+				E6F87ED8302189A300E16DFF /* ImageCache.swift */,
+				E6985A5630219CA600551BF6 /* MetadataParser.swift */,
+				E6765B3230219F98000A5807 /* LibraryIngest.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		E625A7D83021367A00E7ADEB /* Theme */ = {
+			isa = PBXGroup;
+			children = (
+				E6F87ED63021897F00E16DFF /* CGTheme.swift */,
+			);
+			path = Theme;
+			sourceTree = "<group>";
+		};
+		E6F87E4830213B5600E16DFF /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				E6F87E5330213C1400E16DFF /* ComicArchive.swift */,
+				E6F87E5530213C1B00E16DFF /* ReadingProgress.swift */,
+				E68482323021933F00690FF3 /* SmartCollection.swift */,
+				E6765B2A30219EB2000A5807 /* LibraryItem.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		E6F87E4B30213B5600E16DFF /* Library */ = {
+			isa = PBXGroup;
+			children = (
+				E6F87EC230217CE100E16DFF /* RatingViews.swift */,
+				E6F87ECE30217D5400E16DFF /* StatsView.swift */,
+				E6848228302192AF00690FF3 /* SmartCollectionEditor.swift */,
+				E6D312763021AA41007D223C /* LibraryView.swift */,
+				E6D312783021AA54007D223C /* LibraryItemCell.swift */,
+				E6D3127C3021AB31007D223C /* SeriesCard.swift */,
+			);
+			path = Library;
+			sourceTree = "<group>";
+		};
+		E6F87E4D30213B5600E16DFF /* Reader */ = {
+			isa = PBXGroup;
+			children = (
+				E6D3126E3021AA04007D223C /* ReaderView.swift */,
+				E6D312703021AA15007D223C /* PageView.swift */,
+				E6D312723021AA23007D223C /* PageStrip.swift */,
+				E6D312743021AA32007D223C /* ControlsLegend.swift */,
+			);
+			path = Reader;
+			sourceTree = "<group>";
+		};
+		E6F87E4E30213B5600E16DFF /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				E6F87E5930213D1E00E16DFF /* Shared */,
+				E6F87E4B30213B5600E16DFF /* Library */,
+				E6F87E4D30213B5600E16DFF /* Reader */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		E6F87E5930213D1E00E16DFF /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				E6F87ED23021895B00E16DFF /* GhostArt.swift */,
+				E6F87EDA302189BA00E16DFF /* SettingsView.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		E625A7BB3021360E00E7ADEB /* ComicGhost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E625A7C73021360F00E7ADEB /* Build configuration list for PBXNativeTarget "ComicGhost" */;
+			buildPhases = (
+				E625A7B83021360E00E7ADEB /* Sources */,
+				E625A7B93021360E00E7ADEB /* Frameworks */,
+				E625A7BA3021360E00E7ADEB /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ComicGhost;
+			packageProductDependencies = (
+				E625A7F3302136EC00E7ADEB /* ZIPFoundation */,
+			);
+			productName = ComicGhost;
+			productReference = E625A7BC3021360E00E7ADEB /* ComicGhost.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E625A7B43021360E00E7ADEB /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					E625A7BB3021360E00E7ADEB = {
+						CreatedOnToolsVersion = 26.6;
+					};
+				};
+			};
+			buildConfigurationList = E625A7B73021360E00E7ADEB /* Build configuration list for PBXProject "ComicGhost" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = E625A7B33021360E00E7ADEB;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				E6F87E813021549D00E16DFF /* XCLocalSwiftPackageReference "ZIPFoundation-0.9.20" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = E625A7BD3021360E00E7ADEB /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				E625A7BB3021360E00E7ADEB /* ComicGhost */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		E625A7BA3021360E00E7ADEB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E6F87EAB302173B000E16DFF /* Assets.xcassets in Resources */,
+				E625A7F63021374900E7ADEB /* unrar in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		E625A7B83021360E00E7ADEB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E6F87ECF30217D5400E16DFF /* StatsView.swift in Sources */,
+				E6985A5730219CA600551BF6 /* MetadataParser.swift in Sources */,
+				E6765B2B30219EB2000A5807 /* LibraryItem.swift in Sources */,
+				E68482333021933F00690FF3 /* SmartCollection.swift in Sources */,
+				E6F87ED73021897F00E16DFF /* CGTheme.swift in Sources */,
+				E684822B302192C700690FF3 /* ModelContainerSetup.swift in Sources */,
+				E6D3126F3021AA04007D223C /* ReaderView.swift in Sources */,
+				E625A7E73021367A00E7ADEB /* ComicGhostApp.swift in Sources */,
+				E6D312733021AA23007D223C /* PageStrip.swift in Sources */,
+				E6F87EDB302189BA00E16DFF /* SettingsView.swift in Sources */,
+				E6848229302192AF00690FF3 /* SmartCollectionEditor.swift in Sources */,
+				E6F87E5430213C1400E16DFF /* ComicArchive.swift in Sources */,
+				E6F87E8B30215E5C00E16DFF /* WatchedFolder.swift in Sources */,
+				E625A7ED3021367A00E7ADEB /* FolderWatcher.swift in Sources */,
+				E6F87ED33021895B00E16DFF /* GhostArt.swift in Sources */,
+				E6D312713021AA15007D223C /* PageView.swift in Sources */,
+				E6D312773021AA41007D223C /* LibraryView.swift in Sources */,
+				E6765B3330219F98000A5807 /* LibraryIngest.swift in Sources */,
+				E6D3127D3021AB31007D223C /* SeriesCard.swift in Sources */,
+				E6F87ED9302189A300E16DFF /* ImageCache.swift in Sources */,
+				E6F87EC330217CE100E16DFF /* RatingViews.swift in Sources */,
+				E6D312753021AA32007D223C /* ControlsLegend.swift in Sources */,
+				E6F87E5630213C1B00E16DFF /* ReadingProgress.swift in Sources */,
+				E6F87E803021540100E16DFF /* ThumbnailGenerator.swift in Sources */,
+				E6D312793021AA54007D223C /* LibraryItemCell.swift in Sources */,
+				E6F87E7E302153F100E16DFF /* ArchiveExtractor.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		E625A7C53021360F00E7ADEB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		E625A7C63021360F00E7ADEB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		E625A7C83021360F00E7ADEB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = cgr.ComicGhost;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		E625A7C93021360F00E7ADEB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = cgr.ComicGhost;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		E625A7B73021360E00E7ADEB /* Build configuration list for PBXProject "ComicGhost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E625A7C53021360F00E7ADEB /* Debug */,
+				E625A7C63021360F00E7ADEB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E625A7C73021360F00E7ADEB /* Build configuration list for PBXNativeTarget "ComicGhost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E625A7C83021360F00E7ADEB /* Debug */,
+				E625A7C93021360F00E7ADEB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		E6F87E813021549D00E16DFF /* XCLocalSwiftPackageReference "ZIPFoundation-0.9.20" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "ZIPFoundation-0.9.20";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		E625A7F3302136EC00E7ADEB /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ZIPFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = E625A7B43021360E00E7ADEB /* Project object */;
+}
