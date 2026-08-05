@@ -10,6 +10,7 @@ struct LibraryToolsView: View {
     @Environment(\.modelContext) private var context
     @AppStorage(CGGlass.key) private var glassEnabled: Bool = true
     @AppStorage(CGAccent.key) private var accentRaw: String = CGAccent.mauve.rawValue
+    @Query(sort: \IgnoredFile.dateIgnored, order: .reverse) private var ignored: [IgnoredFile]
     @State private var analysis = LibraryAnalysis.shared
     @State private var exportMessage: String?
 
@@ -33,6 +34,7 @@ struct LibraryToolsView: View {
 
             gapsSection
             duplicatesSection
+            ignoredSection
             storageSection
             integritySection
             exportSection
@@ -142,6 +144,79 @@ struct LibraryToolsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background { card }
                 }
+            }
+        }
+    }
+
+    // MARK: - Ignored files
+
+    private var ignoredSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            header("Removed from library",
+                   "Files still on disk that scans skip",
+                   systemImage: "eye.slash")
+
+            if ignored.isEmpty {
+                Text("Nothing removed. Removing an issue from the library without trashing it lists it here, so you can put it back later.")
+                    .font(.callout)
+                    .foregroundStyle(CGTheme.subtext0)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background { card }
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("\(ignored.count) file\(ignored.count == 1 ? "" : "s") skipped")
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(CGTheme.text)
+                        Spacer()
+                        Button("Restore All") {
+                            for entry in ignored { context.delete(entry) }
+                            try? context.save()
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                    }
+
+                    ForEach(ignored) { entry in
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.title)
+                                    .font(.callout)
+                                    .foregroundStyle(CGTheme.text)
+                                    .lineLimit(1)
+                                Text(entry.filename)
+                                    .font(.caption)
+                                    .foregroundStyle(CGTheme.subtext0)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer()
+                            Button("Reveal") {
+                                NSWorkspace.shared.activateFileViewerSelecting(
+                                    [URL(fileURLWithPath: entry.path)]
+                                )
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                            Button("Restore") {
+                                context.delete(entry)
+                                try? context.save()
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                            .foregroundStyle(accent)
+                        }
+                    }
+
+                    Text("Restored files reappear after the next rescan.")
+                        .font(.caption2)
+                        .foregroundStyle(CGTheme.subtext0)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background { card }
             }
         }
     }

@@ -73,10 +73,11 @@ struct LibraryItemCell: View {
             isPresented: $showRemoveConfirm,
             titleVisibility: .visible
         ) {
+            Button("Remove from Library") { removeFromLibraryOnly(item, context: context) }
             Button("Move File to Trash", role: .destructive) { removeFromLibrary(item, context: context) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The comic file moves to the Trash and the issue leaves your library.")
+            Text("Removing from the library leaves the file where it is and stops future scans picking it up. Moving to the Trash deletes it from disk.")
         }
         .task(id: item.coverThumbnailPath) { await loadCover() }
     }
@@ -283,10 +284,11 @@ struct LibraryItemRow: View {
             isPresented: $showRemoveConfirm,
             titleVisibility: .visible
         ) {
+            Button("Remove from Library") { removeFromLibraryOnly(item, context: context) }
             Button("Move File to Trash", role: .destructive) { removeFromLibrary(item, context: context) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The comic file moves to the Trash and the issue leaves your library.")
+            Text("Removing from the library leaves the file where it is and stops future scans picking it up. Moving to the Trash deletes it from disk.")
         }
     }
 
@@ -411,9 +413,21 @@ struct ItemContextMenu: View {
         Button(role: .destructive) {
             showRemoveConfirm = true
         } label: {
-            Label("Remove from Library…", systemImage: "trash")
+            Label("Remove…", systemImage: "trash")
         }
     }
+}
+
+/// Drops the entry and remembers the path so scans skip it. File untouched.
+@MainActor
+func removeFromLibraryOnly(_ item: LibraryItem, context: ModelContext) {
+    let ignored = IgnoredFile(
+        path: item.filePath, title: item.title, seriesName: item.seriesName
+    )
+    context.insert(ignored)
+    if let progress = item.progress { context.delete(progress) }
+    context.delete(item)
+    try? context.save()
 }
 
 @MainActor

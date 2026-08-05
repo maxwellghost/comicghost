@@ -120,7 +120,11 @@ final class LibraryIngest {
         let libraryID = library.id
         let scopePath = scanRoot.standardizedFileURL.path
 
-        let filesOnDisk = Self.comicFiles(under: scanRoot)
+        // Files the user removed from the library but kept on disk.
+        let ignored = Set(
+            ((try? context.fetch(FetchDescriptor<IgnoredFile>())) ?? []).map(\.path)
+        )
+        let filesOnDisk = Self.comicFiles(under: scanRoot).filter { !ignored.contains($0.path) }
         let diskPaths = Set(filesOnDisk.map(\.path))
 
         // Only consider items inside the scanned scope.
