@@ -55,7 +55,7 @@ struct PageStrip: View {
                     RoundedRectangle(cornerRadius: 4)
                         .strokeBorder(isCurrent ? accent : CGTheme.surface1, lineWidth: isCurrent ? 2 : 1)
                 }
-                .softGlow(accent, radius: 8, isActive: isCurrent)
+                .softGlow(accent, radius: 6, isActive: isCurrent)
 
                 Text(label(for: unit))
                     .font(.system(size: 10).monospacedDigit())

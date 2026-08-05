@@ -65,8 +65,10 @@ private struct ContinuousPage: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(width: width)
+                    .grayscale(adjustments.grayscale ? 1 : 0)
                     .brightness(adjustments.brightness)
                     .contrast(adjustments.contrast)
+                    .rotationEffect(adjustments.rotationAngle)
             } else {
                 Rectangle()
                     .fill(CGTheme.surface0.opacity(0.4))
@@ -76,16 +78,16 @@ private struct ContinuousPage: View {
                     }
             }
         }
-        .task(id: adjustments.gamma) { await load() }
+        .task(id: adjustments.processingSignature) { await load() }
     }
 
     private func load() async {
         let url = page.imageURL
-        let gamma = adjustments.gamma
+        let settings = adjustments
         let loaded = await Task.detached(priority: .userInitiated) { () -> NSImage? in
             guard let base = ImageCache.shared.image(for: url) else { return nil }
-            return GammaProcessor.shared.apply(
-                gamma: gamma, to: base, key: url.lastPathComponent
+            return GammaProcessor.shared.process(
+                base, with: settings, key: url.lastPathComponent
             )
         }.value
         image = loaded

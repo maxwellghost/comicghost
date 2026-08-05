@@ -65,7 +65,7 @@ struct SeriesCard: View {
                 .tint(series.readCount == series.items.count ? CGTheme.green : CGTheme.sky)
         }
         .onHover { isHovering = $0 }
-        .softGlow(accent, radius: 10, isActive: isHovering)
+        .softGlow(accent, radius: 7, isActive: isHovering)
         .animation(.easeOut(duration: 0.18), value: isHovering)
         .contextMenu {
             Button {

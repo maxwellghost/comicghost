@@ -66,6 +66,7 @@ enum LibraryRoute: Hashable {
     case collection(UUID)
     case label(UUID)
     case stats
+    case tools
 }
 
 struct GlassBackdrop: View {
@@ -131,6 +132,9 @@ struct LibraryView: View {
     @State private var keyboardSelection: UUID?
     @State private var openAtEnd = false
     @State private var keyMonitor: Any?
+    @State private var openRequests = OpenRequests.shared
+    @State private var isDropTargeted = false
+    @State private var dropMessage: String?
 
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
     private var sort: LibrarySort { LibrarySort(rawValue: sortRaw) ?? .title }
@@ -174,6 +178,10 @@ struct LibraryView: View {
             startKeyMonitor()
         }
         .onDisappear { stopKeyMonitor() }
+        .onChange(of: items.count) { _, _ in refreshSystemIntegration() }
+        .onChange(of: openRequests.pendingPaths) { _, _ in consumePendingOpens() }
+        .onChange(of: openRequests.pendingItemID) { _, _ in consumePendingItem() }
+        .task { refreshSystemIntegration() }
         .onChange(of: route) { _, newValue in persist(newValue) }
         .task {
             ingest.migrateLegacyFolderIfNeeded(context: context)
@@ -215,6 +223,7 @@ struct LibraryView: View {
         case .label(let id): lastRouteRaw = "label:\(id.uuidString)"
         case .label(let id): lastRouteRaw = "label:\(id.uuidString)"
         case .stats: lastRouteRaw = "stats"
+        case .tools: lastRouteRaw = "tools"
         }
     }
 
@@ -222,8 +231,9 @@ struct LibraryView: View {
         guard restoreState, !didRestore else { return }
         didRestore = true
         let parts = lastRouteRaw.split(separator: ":", maxSplits: 1).map(String.init)
-        guard parts.count == 2 || lastRouteRaw == "stats" else { return }
+        guard parts.count == 2 || lastRouteRaw == "stats" || lastRouteRaw == "tools" else { return }
         if lastRouteRaw == "stats" { route = .stats; return }
+        if lastRouteRaw == "tools" { route = .tools; return }
         switch parts[0] {
         case "filter":
             if let f = LibraryFilter(rawValue: parts[1]) { route = .filter(f) }
@@ -247,6 +257,103 @@ struct LibraryView: View {
             route = .series(newName.trimmingCharacters(in: .whitespaces))
         }
         try? context.save()
+    }
+
+    // MARK: - macOS integration
+
+    private var dropOverlay: some View {
+        ZStack {
+            CGTheme.crust.opacity(0.55)
+            VStack(spacing: 12) {
+                Image(systemName: "square.and.arrow.down")
+                    .font(.system(size: 40))
+                    .foregroundStyle(accent)
+                Text("Drop comics to add them")
+                    .font(.headline)
+                    .foregroundStyle(CGTheme.text)
+                if let library = activeLibrary {
+                    Text("They'll be copied into \(library.name)")
+                        .font(.callout)
+                        .foregroundStyle(CGTheme.subtext0)
+                } else {
+                    Text("Add a library in Settings first")
+                        .font(.callout)
+                        .foregroundStyle(CGTheme.red)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func handleDrop(_ urls: [URL]) {
+        let comics = urls.filter { ComicArchive.Format(fileExtension: $0.pathExtension) != nil }
+        guard !comics.isEmpty else {
+            flashDropMessage("Those aren't comic files.")
+            return
+        }
+
+        let result = DropImport.handle(
+            paths: comics.map(\.path),
+            into: activeLibrary,
+            context: context
+        )
+
+        if let first = result.opened.first, result.copied == 0 {
+            openAtEnd = false
+            withAnimation(.easeInOut(duration: 0.3)) { openedItem = first }
+            return
+        }
+
+        var parts: [String] = []
+        if result.copied > 0 { parts.append("Added \(result.copied)") }
+        if !result.opened.isEmpty { parts.append("\(result.opened.count) already in library") }
+        if result.skipped > 0 { parts.append("\(result.skipped) skipped") }
+        flashDropMessage(parts.joined(separator: " · "))
+
+        if result.copied > 0, let library = activeLibrary {
+            Task { await ingest.sync(library: library, context: context) }
+        }
+    }
+
+    private func flashDropMessage(_ text: String) {
+        withAnimation { dropMessage = text }
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            withAnimation { dropMessage = nil }
+        }
+    }
+
+    /// Opens files handed over by Finder, "Open With", or Spotlight.
+    private func consumePendingOpens() {
+        let paths = openRequests.pendingPaths
+        guard !paths.isEmpty else { return }
+        openRequests.pendingPaths = []
+
+        let byPath = Dictionary(items.map { ($0.filePath, $0) }, uniquingKeysWith: { a, _ in a })
+        var target = paths.compactMap { byPath[$0] }.first
+
+        // Not in any watched folder — register it so it can still be read.
+        if target == nil, let first = paths.first {
+            target = DropImport.adopt(path: first, context: context)
+        }
+
+        guard let target else { return }
+        openAtEnd = false
+        withAnimation(.easeInOut(duration: 0.3)) { openedItem = target }
+    }
+
+    private func consumePendingItem() {
+        guard let id = openRequests.pendingItemID else { return }
+        openRequests.pendingItemID = nil
+        guard let item = items.first(where: { $0.id == id }) else { return }
+        openAtEnd = false
+        withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+    }
+
+    private func refreshSystemIntegration() {
+        DockBadge.update(newCount: items.filter { $0.status == .new }.count)
+        let snapshot = items
+        Task { await SpotlightIndex.index(snapshot) }
     }
 
     private func openRandomUnread() {
@@ -279,6 +386,28 @@ struct LibraryView: View {
             .navigationTitle(detailTitle)
             .searchable(text: $searchQuery, placement: .toolbar, prompt: "Search comics")
             .toolbar { toolbarContent }
+            .dropDestination(for: URL.self) { urls, _ in
+                handleDrop(urls)
+                return true
+            } isTargeted: { targeted in
+                isDropTargeted = targeted
+            }
+            .overlay {
+                if isDropTargeted { dropOverlay }
+            }
+            .overlay(alignment: .bottom) {
+                if let dropMessage {
+                    Text(dropMessage)
+                        .font(.callout)
+                        .foregroundStyle(CGTheme.text)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .glassPanel(enabled: glassEnabled, fallback: CGTheme.mantle, cornerRadius: 10)
+                        .softGlow(accent, radius: 8)
+                        .padding(.bottom, 24)
+                        .transition(.opacity)
+                }
+            }
         }
     }
 
@@ -451,6 +580,12 @@ struct LibraryView: View {
             case .stats:
                 StatsView(items: scopedItems)
 
+            case .tools:
+                LibraryToolsView(items: scopedItems) { item in
+                    openAtEnd = false
+                    withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+                }
+
             case .collection(let id):
                 if let collection = collections.first(where: { $0.id == id }) {
                     let matched = sortItems(collection.matches(items))
@@ -523,6 +658,7 @@ struct LibraryView: View {
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 if f == .library, !continueReading.isEmpty { continueShelf }
+                if f == .library, !recentlyAdded.isEmpty { recentlyAddedShelf }
                 seriesGrid(masterGroups)
             }
         }
@@ -694,6 +830,7 @@ struct LibraryView: View {
         if !searchQuery.isEmpty { return "Search" }
         switch route {
         case .stats: return "Stats"
+        case .tools: return "Library Tools"
         case .label(let id): return labels.first { $0.id == id }?.name ?? "Label"
         case .master(let name): return name
         case .series(let name): return name
@@ -725,6 +862,34 @@ struct LibraryView: View {
                 ($0.progress?.lastReadDate ?? .distantPast) > ($1.progress?.lastReadDate ?? .distantPast)
             }
             .prefix(10).map { $0 }
+    }
+
+    /// Newest imports, so a fresh batch is one click from the top.
+    private var recentlyAdded: [LibraryItem] {
+        let cutoff = Date.now.addingTimeInterval(-60 * 60 * 24 * 30)
+        return scopedItems
+            .filter { $0.dateAdded > cutoff }
+            .sorted { $0.dateAdded > $1.dateAdded }
+            .prefix(12)
+            .map { $0 }
+    }
+
+    private var recentlyAddedShelf: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Recently added")
+                .font(.headline)
+                .foregroundStyle(CGTheme.subtext1)
+                .padding(.horizontal)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    ForEach(recentlyAdded) { item in continueCell(item) }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+            }
+        }
+        .padding(.top, 10)
     }
 
     private var continueShelf: some View {
@@ -803,7 +968,7 @@ struct LibraryView: View {
         .padding(14)
         .frame(maxWidth: 420)
         .glassPanel(enabled: glassEnabled, fallback: CGTheme.mantle, cornerRadius: 12)
-        .softGlow(accent, radius: 12)
+        .softGlow(accent, radius: 8)
         .padding(.bottom, 20)
     }
 
@@ -868,6 +1033,7 @@ struct LibraryView: View {
 
                 sidebarLabel("Insights").padding(.top, 10)
                 statsRow
+                toolsRow
 
                 Spacer(minLength: 20)
             }
@@ -1187,6 +1353,32 @@ struct LibraryView: View {
                     .frame(width: 18)
                     .foregroundStyle(isSelected ? accent : CGTheme.subtext1)
                 Text("Stats")
+                Spacer()
+            }
+            .font(.body)
+            .foregroundStyle(isSelected ? CGTheme.text : CGTheme.subtext1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? CGTheme.surface0.opacity(glassEnabled ? 0.7 : 1) : .clear)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var toolsRow: some View {
+        let isSelected = route == .tools
+        return Button {
+            route = .tools
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "wrench.and.screwdriver")
+                    .frame(width: 18)
+                    .foregroundStyle(isSelected ? accent : CGTheme.subtext1)
+                Text("Library Tools")
                 Spacer()
             }
             .font(.body)

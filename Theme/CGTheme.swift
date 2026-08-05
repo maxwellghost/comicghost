@@ -118,10 +118,12 @@ struct SoftGlow: ViewModifier {
     var radius: CGFloat = 12
     var isActive: Bool = true
 
+    /// Ambient light, not neon. The inner shadow is tight and faint; the outer
+    /// one is wider and fainter still, so edges read as lit rather than ringed.
     func body(content: Content) -> some View {
         content
-            .shadow(color: isActive ? color.opacity(0.45) : .clear, radius: radius)
-            .shadow(color: isActive ? color.opacity(0.18) : .clear, radius: radius * 2.2)
+            .shadow(color: isActive ? color.opacity(0.16) : .clear, radius: radius * 0.55)
+            .shadow(color: isActive ? color.opacity(0.05) : .clear, radius: radius * 1.4)
     }
 }
 

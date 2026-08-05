@@ -20,6 +20,8 @@ struct ReaderView: View {
     @AppStorage("hasSeenReaderControls") private var hasSeenControls: Bool = false
     @AppStorage("readerFitMode") private var fitModeRaw: String = FitMode.page.rawValue
     @AppStorage("readerSpreadMode") private var spreadEnabled: Bool = false
+    /// Shifts spread pairing by one page when the natural pairing is off.
+    @AppStorage("readerSpreadOffset") private var spreadOffset: Bool = false
     @AppStorage("autoHideChrome") private var autoHideChrome: Bool = true
     /// Series names set to manga mode, stored as a newline-separated list.
     @AppStorage("mangaSeries") private var mangaSeriesRaw: String = ""
@@ -30,6 +32,11 @@ struct ReaderView: View {
     @AppStorage(ImageAdjustments.brightnessKey) private var adjBrightness: Double = 0
     @AppStorage(ImageAdjustments.contrastKey) private var adjContrast: Double = 1
     @AppStorage(ImageAdjustments.gammaKey) private var adjGamma: Double = 1
+    @AppStorage(ImageAdjustments.grayscaleKey) private var adjGrayscale: Bool = false
+    @AppStorage(ImageAdjustments.autoContrastKey) private var adjAutoContrast: Bool = false
+    @AppStorage(ImageAdjustments.autoCropKey) private var adjAutoCrop: Bool = false
+    @AppStorage(ImageAdjustments.rotationKey) private var adjRotation: Int = 0
+    @AppStorage("preventSleepWhileReading") private var preventSleep: Bool = true
 
     @State private var archive: ComicArchive?
     @State private var pageSizes: [Int: CGSize] = [:]
@@ -48,6 +55,7 @@ struct ReaderView: View {
     @State private var previousItem: LibraryItem?
     @State private var chromeVisible = true
     @State private var hideTask: Task<Void, Never>?
+    @State private var sleepAssertion: NSObjectProtocol?
     @State private var showAdjustments = false
     @State private var magnifierOn = false
     @State private var bookmarks: [Bookmark] = []
@@ -59,12 +67,24 @@ struct ReaderView: View {
     private var adjustments: Binding<ImageAdjustments> {
         Binding(
             get: {
-                ImageAdjustments(brightness: adjBrightness, contrast: adjContrast, gamma: adjGamma)
+                ImageAdjustments(
+                    brightness: adjBrightness,
+                    contrast: adjContrast,
+                    gamma: adjGamma,
+                    grayscale: adjGrayscale,
+                    autoContrast: adjAutoContrast,
+                    autoCrop: adjAutoCrop,
+                    rotation: adjRotation
+                )
             },
             set: { newValue in
                 adjBrightness = newValue.brightness
                 adjContrast = newValue.contrast
                 adjGamma = newValue.gamma
+                adjGrayscale = newValue.grayscale
+                adjAutoContrast = newValue.autoContrast
+                adjAutoCrop = newValue.autoCrop
+                adjRotation = newValue.rotation
             }
         )
     }
@@ -199,9 +219,14 @@ struct ReaderView: View {
                 hasSeenControls = true
             }
             wakeChrome()
+            startSleepPrevention()
         }
-        .onDisappear { hideTask?.cancel() }
+        .onDisappear {
+            hideTask?.cancel()
+            stopSleepPrevention()
+        }
         .onChange(of: spreadEnabled) { _, _ in rebuildUnits(preservingPage: true) }
+        .onChange(of: spreadOffset) { _, _ in rebuildUnits(preservingPage: true) }
         .background { shortcuts }
     }
 
@@ -229,6 +254,8 @@ struct ReaderView: View {
                 .keyboardShortcut("l", modifiers: [])
             Button("") { withAnimation(.easeInOut(duration: 0.25)) { hideControls.toggle() } }
                 .keyboardShortcut("h", modifiers: [])
+            Button("") { if spreadEnabled { spreadOffset.toggle() } }
+                .keyboardShortcut("o", modifiers: [])
             Button("") { showJump = true }
                 .keyboardShortcut("g", modifiers: [])
             Button("") { showStrip.toggle() }
@@ -256,6 +283,23 @@ struct ReaderView: View {
             guard !Task.isCancelled else { return }
             chromeVisible = false
         }
+    }
+
+    /// Keeps the display awake while a comic is open — reading is quiet,
+    /// and the screen dimming mid-page is annoying.
+    private func startSleepPrevention() {
+        guard preventSleep, sleepAssertion == nil else { return }
+        sleepAssertion = ProcessInfo.processInfo.beginActivity(
+            options: [.idleDisplaySleepDisabled, .userInitiated],
+            reason: "Reading a comic"
+        )
+    }
+
+    private func stopSleepPrevention() {
+        if let sleepAssertion {
+            ProcessInfo.processInfo.endActivity(sleepAssertion)
+        }
+        sleepAssertion = nil
     }
 
     private func toggleFullScreen() {
@@ -485,7 +529,7 @@ struct ReaderView: View {
         .frame(width: 220, alignment: .leading)
         .frame(maxHeight: .infinity)
         .glassPanel(enabled: glassEnabled, fallback: CGTheme.mantle)
-        .softGlow(accent, radius: 14)
+        .softGlow(accent, radius: 9)
         .onHover { hovering in
             if !hovering { showNavPane = false }
         }
@@ -511,6 +555,13 @@ struct ReaderView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+
+                if spreadEnabled {
+                    Toggle("Offset pairing", isOn: $spreadOffset)
+                        .toggleStyle(.switch)
+                        .tint(accent)
+                        .font(.caption)
+                }
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -675,7 +726,7 @@ struct ReaderView: View {
                     RoundedRectangle(cornerRadius: 12).fill(CGTheme.base.opacity(0.9))
                 }
             }
-            .softGlow(accent, radius: 12)
+            .softGlow(accent, radius: 8)
         }
         .buttonStyle(.plain)
         .transition(.opacity.combined(with: .move(edge: isManga ? .leading : .trailing)))
@@ -806,9 +857,12 @@ struct ReaderView: View {
 
         var result: [[ComicPage]] = []
         var index = 0
+        // Normally the cover stands alone; the offset toggle flips that, which
+        // fixes runs where the natural pairing lands a spread across two units.
+        let soloFirst = !spreadOffset
         while index < pages.count {
             let page = pages[index]
-            if index == 0 || isLandscape(page) {
+            if (index == 0 && soloFirst) || isLandscape(page) {
                 result.append([page])
                 index += 1
                 continue

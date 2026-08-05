@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @Environment(\.modelContext) private var context
@@ -10,11 +11,14 @@ struct SettingsView: View {
     @AppStorage("autoHideChrome") private var autoHideChrome: Bool = true
     @AppStorage("alwaysShowEdges") private var alwaysShowEdges: Bool = false
     @AppStorage("hideReaderControls") private var hideReaderControls: Bool = false
+    @AppStorage("preventSleepWhileReading") private var preventSleep: Bool = true
+    @AppStorage(SpotlightIndex.enabledKey) private var spotlightEnabled: Bool = true
     @AppStorage(CGAccent.key) private var accentRaw: String = CGAccent.mauve.rawValue
     @AppStorage(CGThemeCatalog.key) private var themeID: String = "mocha"
 
     @State private var renaming: ComicLibrary?
     @State private var newName = ""
+    @State private var backupMessage: String?
 
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
 
@@ -148,6 +152,31 @@ struct SettingsView: View {
                 .toggleStyle(.switch)
                 .tint(accent)
 
+                Toggle(isOn: $spotlightEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Index library in Spotlight")
+                        Text("Find comics from system search. Turning this off clears the index.")
+                            .font(.caption)
+                            .foregroundStyle(CGTheme.subtext0)
+                    }
+                }
+                .toggleStyle(.switch)
+                .tint(accent)
+                .onChange(of: spotlightEnabled) { _, enabled in
+                    if !enabled { Task { await SpotlightIndex.clear() } }
+                }
+
+                Toggle(isOn: $preventSleep) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Keep the display awake while reading")
+                        Text("Stops the screen dimming mid-page.")
+                            .font(.caption)
+                            .foregroundStyle(CGTheme.subtext0)
+                    }
+                }
+                .toggleStyle(.switch)
+                .tint(accent)
+
                 Toggle(isOn: $alwaysShowEdges) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Always show page-turn arrows")
@@ -158,6 +187,25 @@ struct SettingsView: View {
                 }
                 .toggleStyle(.switch)
                 .tint(accent)
+            }
+            Section("Backup") {
+                Text("Reading progress, ratings, favorites, labels, bookmarks, and collections live only in this app — not in your comic files. Export keeps a copy.")
+                    .font(.caption)
+                    .foregroundStyle(CGTheme.subtext0)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack {
+                    Button("Export Backup…") { exportBackup() }
+                    Button("Restore from Backup…") { importBackup() }
+                    Spacer()
+                }
+
+                if let backupMessage {
+                    Text(backupMessage)
+                        .font(.caption)
+                        .foregroundStyle(CGTheme.subtext1)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .formStyle(.grouped)
@@ -255,6 +303,43 @@ struct SettingsView: View {
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+    }
+
+    private func exportBackup() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = BackupService.suggestedFilename()
+        panel.allowedContentTypes = [.json]
+        panel.prompt = "Export"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let payload = BackupService.makePayload(context: context)
+            try BackupService.encode(payload).write(to: url)
+            backupMessage = "Exported \(payload.items.count) issues, \(payload.labels.count) labels, and \(payload.collections.count) collections."
+        } catch {
+            backupMessage = "Export failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func importBackup() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.json]
+        panel.prompt = "Restore"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let payload = try BackupService.decode(Data(contentsOf: url))
+            let result = BackupService.restore(payload, context: context)
+            var parts = ["Restored \(result.matched) issues"]
+            if result.missing > 0 { parts.append("\(result.missing) not found in this library") }
+            if result.labelsCreated > 0 { parts.append("\(result.labelsCreated) labels added") }
+            if result.collectionsCreated > 0 { parts.append("\(result.collectionsCreated) collections added") }
+            backupMessage = parts.joined(separator: " · ")
+        } catch {
+            backupMessage = "Restore failed: \(error.localizedDescription)"
+        }
     }
 
     private func addLibrary() {

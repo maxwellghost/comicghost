@@ -63,8 +63,10 @@ struct PageView: View {
                         .frame(width: geo.size.width, height: geo.size.height)
                 }
             }
+            .grayscale(adjustments.grayscale ? 1 : 0)
             .brightness(adjustments.brightness)
             .contrast(adjustments.contrast)
+            .rotationEffect(adjustments.rotationAngle)
             .frame(width: geo.size.width, height: geo.size.height)
             .clipped()
             .overlay {
@@ -110,11 +112,12 @@ struct PageView: View {
             }
             .onChange(of: fitMode) { _, _ in applyFit(in: geo.size) }
             .onChange(of: rightToLeft) { _, _ in applyFit(in: geo.size) }
+            .onChange(of: adjustments.rotation) { _, _ in applyFit(in: geo.size) }
             .onChange(of: scrollPanningEnabled) { _, newValue in
                 panningEnabled = newValue
             }
-            .task(id: "\(unitID)#\(adjustments.gamma)") {
-                await applyGamma()
+            .task(id: "\(unitID)#\(adjustments.processingSignature)") {
+                await applyProcessing()
                 refreshMetrics(in: containerSize)
             }
         }
@@ -124,20 +127,21 @@ struct PageView: View {
         pages.map(\.id.uuidString).joined(separator: "+")
     }
 
-    /// Gamma needs a Core Image pass; brightness and contrast don't.
-    private func applyGamma() async {
-        guard adjustments.needsGammaPass else {
+    /// Gamma, auto-contrast, and auto-crop need a pixel pass;
+    /// brightness, contrast, grayscale, and rotation are cheap modifiers.
+    private func applyProcessing() async {
+        guard adjustments.needsProcessing else {
             if !processed.isEmpty { processed = [:] }
             return
         }
         let urls = orderedPages.map(\.imageURL)
-        let gamma = adjustments.gamma
+        let settings = adjustments
         let result = await Task.detached(priority: .userInitiated) { () -> [URL: NSImage] in
             var output: [URL: NSImage] = [:]
             for url in urls {
                 guard let base = ImageCache.shared.image(for: url) else { continue }
-                output[url] = GammaProcessor.shared.apply(
-                    gamma: gamma, to: base, key: url.lastPathComponent
+                output[url] = GammaProcessor.shared.process(
+                    base, with: settings, key: url.lastPathComponent
                 )
             }
             return output

@@ -3,6 +3,8 @@ import SwiftData
 
 @main
 struct ComicGhostApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     /// Reading the stored theme here means changing it re-renders everything,
     /// since CGTheme's colours are computed from the current selection.
     @AppStorage(CGThemeCatalog.key) private var themeID: String = "mocha"

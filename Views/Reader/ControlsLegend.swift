@@ -18,6 +18,7 @@ struct ControlsLegend: View {
             ("plus.forwardslash.minus", "⌘+ ⌘− ⌘0", "Zoom in / out / fit"),
             ("arrow.left.and.right.square", "F", "Fit page / fit width"),
             ("book", "S", "Single page / spread"),
+            ("arrow.left.arrow.right.square", "O", "Offset spread pairing"),
             ("scroll", "C", "Paged / continuous scroll"),
             ("bookmark", "B", "Bookmark this page"),
             ("slider.horizontal.3", "I", "Image adjustments"),
@@ -80,7 +81,7 @@ struct ControlsLegend: View {
         .padding(22)
         .frame(width: 430, alignment: .leading)
         .glassPanel(enabled: glassEnabled, fallback: CGTheme.mantle, cornerRadius: 14)
-        .softGlow(CGTheme.mauve, radius: 18)
+        .softGlow(CGTheme.accent, radius: 9)
     }
 }
 
@@ -97,7 +98,7 @@ struct PageTurnHint: View {
             .foregroundStyle(CGTheme.text.opacity(0.85))
             .padding(14)
             .background { Circle().fill(.ultraThinMaterial) }
-            .softGlow(CGTheme.mauve, radius: 10, isActive: isVisible && !dimmed)
+            .softGlow(CGTheme.accent, radius: 7, isActive: isVisible && !dimmed)
             .opacity(isVisible ? (dimmed ? 0.35 : 1) : 0)
             .animation(.easeOut(duration: 0.18), value: isVisible)
             .animation(.easeOut(duration: 0.18), value: dimmed)
