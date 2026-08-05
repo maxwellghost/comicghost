@@ -8,16 +8,28 @@ struct ReaderView: View {
     let item: LibraryItem
     var onClose: () -> Void
     var onOpenNext: (LibraryItem) -> Void = { _ in }
+    var onOpenPrevious: (LibraryItem) -> Void = { _ in }
+    /// Set when arriving by paging backwards, so we land on the last page.
+    var startAtEnd: Bool = false
 
     @Environment(\.modelContext) private var context
     @AppStorage(CGGlass.key) private var glassEnabled: Bool = true
     @AppStorage(CGAccent.key) private var accentRaw: String = CGAccent.mauve.rawValue
+    /// Read so a theme change re-renders this view tree.
+    @AppStorage(CGThemeCatalog.key) private var themeID: String = "mocha"
     @AppStorage("hasSeenReaderControls") private var hasSeenControls: Bool = false
     @AppStorage("readerFitMode") private var fitModeRaw: String = FitMode.page.rawValue
     @AppStorage("readerSpreadMode") private var spreadEnabled: Bool = false
     @AppStorage("autoHideChrome") private var autoHideChrome: Bool = true
     /// Series names set to manga mode, stored as a newline-separated list.
     @AppStorage("mangaSeries") private var mangaSeriesRaw: String = ""
+    /// Series set to continuous scrolling, newline-separated.
+    @AppStorage("continuousSeries") private var continuousSeriesRaw: String = ""
+    @AppStorage("alwaysShowEdges") private var alwaysShowEdges: Bool = false
+    @AppStorage("hideReaderControls") private var hideControls: Bool = false
+    @AppStorage(ImageAdjustments.brightnessKey) private var adjBrightness: Double = 0
+    @AppStorage(ImageAdjustments.contrastKey) private var adjContrast: Double = 1
+    @AppStorage(ImageAdjustments.gammaKey) private var adjGamma: Double = 1
 
     @State private var archive: ComicArchive?
     @State private var pageSizes: [Int: CGSize] = [:]
@@ -33,11 +45,45 @@ struct ReaderView: View {
     @State private var hoveringLeft = false
     @State private var hoveringRight = false
     @State private var nextItem: LibraryItem?
+    @State private var previousItem: LibraryItem?
     @State private var chromeVisible = true
     @State private var hideTask: Task<Void, Never>?
+    @State private var showAdjustments = false
+    @State private var magnifierOn = false
+    @State private var bookmarks: [Bookmark] = []
+    @State private var continuousPage = 0
 
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
     private var fitMode: FitMode { FitMode(rawValue: fitModeRaw) ?? .page }
+
+    private var adjustments: Binding<ImageAdjustments> {
+        Binding(
+            get: {
+                ImageAdjustments(brightness: adjBrightness, contrast: adjContrast, gamma: adjGamma)
+            },
+            set: { newValue in
+                adjBrightness = newValue.brightness
+                adjContrast = newValue.contrast
+                adjGamma = newValue.gamma
+            }
+        )
+    }
+
+    // MARK: - Continuous mode (per series)
+
+    private var continuousSeriesSet: Set<String> {
+        Set(continuousSeriesRaw.split(separator: "\n").map(String.init))
+    }
+
+    private var isContinuous: Bool {
+        continuousSeriesSet.contains(item.seriesKey)
+    }
+
+    private func setContinuous(_ enabled: Bool) {
+        var set = continuousSeriesSet
+        if enabled { set.insert(item.seriesKey) } else { set.remove(item.seriesKey) }
+        continuousSeriesRaw = set.sorted().joined(separator: "\n")
+    }
     private var isZoomed: Bool { zoom > 1.01 }
 
     // MARK: - Manga mode (per series)
@@ -71,7 +117,10 @@ struct ReaderView: View {
     }
 
     private var chromeShown: Bool {
-        !autoHideChrome || chromeVisible || showNavPane || showLegend || showJump || showStrip
+        // Panels the user opened always win over the hide setting.
+        let overlayOpen = showNavPane || showLegend || showJump || showStrip || showAdjustments
+        if hideControls { return overlayOpen }
+        return !autoHideChrome || chromeVisible || overlayOpen
     }
 
     var body: some View {
@@ -95,6 +144,23 @@ struct ReaderView: View {
             helpButton.opacity(chromeShown ? 1 : 0)
 
             if showLegend { legendOverlay }
+
+            if showAdjustments {
+                VStack {
+                    HStack {
+                        Spacer()
+                        AdjustmentsPanel(
+                            adjustments: adjustments,
+                            glassEnabled: glassEnabled,
+                            accent: accent
+                        ) { showAdjustments = false }
+                        .padding(.top, 84)
+                        .padding(.trailing, 20)
+                    }
+                    Spacer()
+                }
+                .transition(.opacity.combined(with: .move(edge: .trailing)))
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottom) {
@@ -122,6 +188,9 @@ struct ReaderView: View {
         .animation(.easeOut(duration: 0.22), value: showNavPane)
         .animation(.easeOut(duration: 0.22), value: showLegend)
         .animation(.easeOut(duration: 0.25), value: showStrip)
+        .animation(.easeOut(duration: 0.2), value: showAdjustments)
+        .animation(.easeInOut(duration: 0.25), value: hideControls)
+        .animation(.easeOut(duration: 0.25), value: isContinuous)
         .animation(.easeInOut(duration: 0.3), value: chromeShown)
         .task {
             await load()
@@ -150,6 +219,16 @@ struct ReaderView: View {
                 .keyboardShortcut("s", modifiers: [])
             Button("") { setManga(!isManga) }
                 .keyboardShortcut("m", modifiers: [])
+            Button("") { withAnimation(.easeOut(duration: 0.2)) { setContinuous(!isContinuous) } }
+                .keyboardShortcut("c", modifiers: [])
+            Button("") { toggleBookmark() }
+                .keyboardShortcut("b", modifiers: [])
+            Button("") { showAdjustments.toggle() }
+                .keyboardShortcut("i", modifiers: [])
+            Button("") { magnifierOn.toggle() }
+                .keyboardShortcut("l", modifiers: [])
+            Button("") { withAnimation(.easeInOut(duration: 0.25)) { hideControls.toggle() } }
+                .keyboardShortcut("h", modifiers: [])
             Button("") { showJump = true }
                 .keyboardShortcut("g", modifiers: [])
             Button("") { showStrip.toggle() }
@@ -185,8 +264,10 @@ struct ReaderView: View {
 
     private func dismissOrClose() {
         if showLegend { showLegend = false }
+        else if showAdjustments { showAdjustments = false }
         else if showJump { showJump = false }
         else if showStrip { showStrip = false }
+        else if magnifierOn { magnifierOn = false }
         else { onClose() }
     }
 
@@ -235,6 +316,18 @@ struct ReaderView: View {
                         .padding(.vertical, 3)
                         .background(accent, in: Capsule())
                 }
+                chromeButton(magnifierOn ? "magnifyingglass.circle.fill" : "magnifyingglass.circle") {
+                    magnifierOn.toggle()
+                }
+                .help("Magnifier (L)")
+                chromeButton("slider.horizontal.3") { showAdjustments.toggle() }
+                    .help("Image adjustments (I)")
+                chromeButton(isBookmarked ? "bookmark.fill" : "bookmark") { toggleBookmark() }
+                    .help("Bookmark this page (B)")
+                chromeButton("eye.slash") {
+                    withAnimation(.easeInOut(duration: 0.25)) { hideControls = true }
+                }
+                .help("Hide controls (H)")
                 chromeButton("rectangle.grid.1x2") { showStrip.toggle() }
                     .help("Page thumbnails (T)")
                 chromeButton("arrow.up.left.and.arrow.down.right") { toggleFullScreen() }
@@ -296,6 +389,16 @@ struct ReaderView: View {
 
             Text(pageLabel).font(.caption).foregroundStyle(CGTheme.subtext0)
 
+            if let previousItem {
+                Button { onOpenPrevious(previousItem) } label: {
+                    Label("Previous: \(previousItem.title)", systemImage: "arrow.left")
+                        .font(.callout)
+                        .foregroundStyle(CGTheme.subtext1)
+                        .lineLimit(2)
+                }
+                .buttonStyle(.plain)
+            }
+
             if let nextItem {
                 Button { onOpenNext(nextItem) } label: {
                     Label("Next: \(nextItem.title)", systemImage: "arrow.right")
@@ -318,12 +421,62 @@ struct ReaderView: View {
             }
             .buttonStyle(.plain)
 
+            Button {
+                withAnimation(.easeInOut(duration: 0.25)) { hideControls.toggle() }
+            } label: {
+                Label(hideControls ? "Show controls" : "Hide controls",
+                      systemImage: hideControls ? "eye" : "eye.slash")
+                    .font(.callout)
+                    .foregroundStyle(CGTheme.subtext1)
+            }
+            .buttonStyle(.plain)
+
+            Button { showAdjustments.toggle() } label: {
+                Label("Image adjustments", systemImage: "slider.horizontal.3")
+                    .font(.callout)
+                    .foregroundStyle(CGTheme.subtext1)
+            }
+            .buttonStyle(.plain)
+
             Button { showLegend = true } label: {
                 Label("Controls", systemImage: "questionmark.circle")
                     .font(.callout)
                     .foregroundStyle(CGTheme.subtext1)
             }
             .buttonStyle(.plain)
+
+            if !bookmarks.isEmpty {
+                Divider().overlay(CGTheme.surface1)
+                Text("Bookmarks").font(.caption).foregroundStyle(CGTheme.subtext0)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(bookmarks) { bookmark in
+                            Button { jumpToBookmark(bookmark) } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "bookmark.fill")
+                                        .font(.caption2)
+                                        .foregroundStyle(accent)
+                                    Text(bookmark.displayLabel)
+                                        .font(.callout)
+                                        .foregroundStyle(CGTheme.subtext1)
+                                        .lineLimit(1)
+                                    Spacer()
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button("Remove", role: .destructive) {
+                                    context.delete(bookmark)
+                                    try? context.save()
+                                    loadBookmarks()
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 150)
+            }
 
             Spacer()
         }
@@ -355,6 +508,21 @@ struct ReaderView: View {
                 Picker("", selection: $spreadEnabled) {
                     Text("Single").tag(false)
                     Text("Spread").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Mode").font(.caption).foregroundStyle(CGTheme.subtext0)
+                Picker("", selection: Binding(
+                    get: { isContinuous },
+                    set: { value in
+                        withAnimation(.easeOut(duration: 0.2)) { setContinuous(value) }
+                    }
+                )) {
+                    Text("Paged").tag(false)
+                    Text("Scroll").tag(true)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -416,9 +584,29 @@ struct ReaderView: View {
 
     private var pager: some View {
         ZStack {
-            if units.indices.contains(currentUnit) {
+            if isContinuous, let archive {
+                ContinuousPagesView(
+                    pages: archive.pages,
+                    adjustments: adjustments.wrappedValue,
+                    widthFraction: fitMode == .width ? 1.0 : 0.72,
+                    currentPage: $continuousPage
+                )
+                .onChange(of: continuousPage) { _, newPage in
+                    currentUnit = unitIndex(containing: newPage)
+                    saveProgress()
+                }
+            } else if units.indices.contains(currentUnit) {
                 PageView(pages: units[currentUnit], fitMode: fitMode,
-                         rightToLeft: isManga, zoom: $zoom)
+                         rightToLeft: isManga,
+                         scrollPanningEnabled: !showStrip && !showLegend && !showJump && !showAdjustments,
+                         onHorizontalSwipe: { direction in
+                             turnUnit(isManga ? -direction : direction)
+                         },
+                         adjustments: adjustments.wrappedValue,
+                         magnifierEnabled: magnifierOn,
+                         zoom: $zoom)
+                .id(currentUnit)
+                .transition(.opacity)
             }
 
             if !isZoomed {
@@ -498,7 +686,11 @@ struct ReaderView: View {
     ) -> some View {
         ZStack {
             Rectangle().fill(.clear)
-            PageTurnHint(symbol: symbol, isVisible: isHovering.wrappedValue && enabled)
+            PageTurnHint(
+                symbol: symbol,
+                isVisible: enabled && (alwaysShowEdges || isHovering.wrappedValue),
+                dimmed: alwaysShowEdges && !isHovering.wrappedValue
+            )
         }
         .frame(width: 130)
         .contentShape(Rectangle())
@@ -594,8 +786,14 @@ struct ReaderView: View {
             onOpenNext(nextItem)
             return
         }
+        if next < 0, direction < 0, let previousItem {
+            onOpenPrevious(previousItem)
+            return
+        }
         guard next >= 0, next < units.count else { return }
-        currentUnit = next
+        withAnimation(.easeInOut(duration: 0.16)) {
+            currentUnit = next
+        }
         zoom = 1.0
         saveProgress()
         preloadAround()
@@ -660,15 +858,16 @@ struct ReaderView: View {
 
     // MARK: - Loading & progress
 
+    /// All extraction runs off the main actor — opening a 40-page CBR used to
+    /// shell out to unrar and write every page while the UI thread waited.
     private func load() async {
-        do {
-            let url = URL(fileURLWithPath: item.filePath)
-            let extractor = try ArchiveExtractorRouter.extractor(for: url)
-            let pages = try extractor.extractPages(from: url)
-            let format = ComicArchive.Format(fileExtension: url.pathExtension) ?? .cbz
-            archive = ComicArchive(sourceURL: url, format: format, pages: pages)
+        let url = URL(fileURLWithPath: item.filePath)
 
-            pageSizes = await Task.detached(priority: .utility) { () -> [Int: CGSize] in
+        let result = await Task.detached(priority: .userInitiated) { () -> LoadResult in
+            do {
+                let extractor = try ArchiveExtractorRouter.extractor(for: url)
+                let pages = try extractor.extractPages(from: url)
+
                 var sizes: [Int: CGSize] = [:]
                 for page in pages {
                     guard let source = CGImageSourceCreateWithURL(page.imageURL as CFURL, nil),
@@ -678,18 +877,44 @@ struct ReaderView: View {
                     else { continue }
                     sizes[page.index] = CGSize(width: width, height: height)
                 }
-                return sizes
-            }.value
+                return LoadResult(pages: pages, sizes: sizes, error: nil)
+            } catch {
+                return LoadResult(pages: [], sizes: [:], error: error.localizedDescription)
+            }
+        }.value
 
-            units = buildUnits(from: pages)
-            item.isNew = false
-            let savedPage = min(item.progress?.currentPage ?? 0, pages.count - 1)
-            currentUnit = unitIndex(containing: savedPage)
-            nextItem = findNextIssue()
-            preloadAround()
-        } catch {
-            loadError = error.localizedDescription
+        if let message = result.error {
+            loadError = message
+            return
         }
+
+        let format = ComicArchive.Format(fileExtension: url.pathExtension) ?? .cbz
+        archive = ComicArchive(sourceURL: url, format: format, pages: result.pages)
+        pageSizes = result.sizes
+        units = buildUnits(from: result.pages)
+
+        item.isNew = false
+        let savedPage = min(item.progress?.currentPage ?? 0, max(result.pages.count - 1, 0))
+        currentUnit = unitIndex(containing: savedPage)
+        nextItem = findNextIssue()
+        preloadAround()
+    }
+
+    private struct LoadResult: Sendable {
+        let pages: [ComicPage]
+        let sizes: [Int: CGSize]
+        let error: String?
+    }
+
+    private func findPreviousIssue() -> LibraryItem? {
+        let all = (try? context.fetch(FetchDescriptor<LibraryItem>())) ?? []
+        let siblings = all
+            .filter { $0.seriesKey == item.seriesKey }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        guard let index = siblings.firstIndex(where: { $0.id == item.id }), index > 0 else {
+            return nil
+        }
+        return siblings[index - 1]
     }
 
     private func findNextIssue() -> LibraryItem? {
@@ -700,6 +925,45 @@ struct ReaderView: View {
         guard let index = siblings.firstIndex(where: { $0.id == item.id }),
               index + 1 < siblings.count else { return nil }
         return siblings[index + 1]
+    }
+
+    // MARK: - Bookmarks
+
+    private var currentPageIndex: Int {
+        if isContinuous { return continuousPage }
+        guard units.indices.contains(currentUnit) else { return 0 }
+        return units[currentUnit].first?.index ?? 0
+    }
+
+    private var isBookmarked: Bool {
+        bookmarks.contains { $0.page == currentPageIndex }
+    }
+
+    private func loadBookmarks() {
+        let id = item.id
+        let all = (try? context.fetch(FetchDescriptor<Bookmark>())) ?? []
+        bookmarks = all
+            .filter { $0.itemID == id }
+            .sorted { $0.page < $1.page }
+    }
+
+    private func toggleBookmark() {
+        let page = currentPageIndex
+        if let existing = bookmarks.first(where: { $0.page == page }) {
+            context.delete(existing)
+        } else {
+            context.insert(Bookmark(itemID: item.id, page: page))
+        }
+        try? context.save()
+        loadBookmarks()
+    }
+
+    private func jumpToBookmark(_ bookmark: Bookmark) {
+        if isContinuous {
+            continuousPage = bookmark.page
+        } else {
+            jump(to: unitIndex(containing: bookmark.page))
+        }
     }
 
     private func saveProgress() {

@@ -1,18 +1,17 @@
 import Foundation
 
 /// Transient, in-memory representation of an opened comic file.
-/// Not persisted — `LibraryItem` is the durable record.
-struct ComicArchive {
+/// Sendable so extraction can happen off the main actor.
+struct ComicArchive: Sendable {
     let sourceURL: URL
     let format: Format
     let pages: [ComicPage]
 
-    enum Format: String, CaseIterable {
+    enum Format: String, CaseIterable, Sendable {
         case cbz, cbr, cb7
         case zip, rar, sevenZip, tar
         case pdf
 
-        /// Every extension the library will pick up.
         static let allExtensions: Set<String> = [
             "cbz", "cbr", "cb7",
             "zip", "rar", "7z",
@@ -34,7 +33,6 @@ struct ComicArchive {
             }
         }
 
-        /// Which extraction backend handles this format.
         var backend: Backend {
             switch self {
             case .cbz, .zip: return .zipFoundation
@@ -44,14 +42,14 @@ struct ComicArchive {
             }
         }
 
-        enum Backend { case zipFoundation, unrar, bsdtar, pdfKit }
+        enum Backend: Sendable { case zipFoundation, unrar, bsdtar, pdfKit }
     }
 
     var pageCount: Int { pages.count }
 }
 
 /// A single page: a reference to an image on disk plus its position.
-struct ComicPage: Identifiable {
+struct ComicPage: Identifiable, Sendable {
     let id = UUID()
     let index: Int          // 0-based reading order
     let imageURL: URL       // extracted or rendered image

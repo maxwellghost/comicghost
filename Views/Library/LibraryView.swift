@@ -61,8 +61,10 @@ enum CoverSize: String, CaseIterable, Identifiable {
 /// What the detail pane is currently showing.
 enum LibraryRoute: Hashable {
     case filter(LibraryFilter)
+    case master(String)          // umbrella folder, e.g. "Dragon Ball"
     case series(String)
     case collection(UUID)
+    case label(UUID)
     case stats
 }
 
@@ -98,9 +100,14 @@ struct LibraryView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \LibraryItem.dateAdded, order: .reverse) private var items: [LibraryItem]
     @Query(sort: \SmartCollection.sortIndex) private var collections: [SmartCollection]
+    @Query(sort: \ComicLibrary.sortIndex) private var libraries: [ComicLibrary]
+    @Query(sort: \ComicLabel.sortIndex) private var allLabels: [ComicLabel]
+    @Query(sort: \ComicLabel.sortIndex) private var labels: [ComicLabel]
 
     @AppStorage(CGGlass.key) private var glassEnabled: Bool = true
     @AppStorage(CGAccent.key) private var accentRaw: String = CGAccent.mauve.rawValue
+    /// Read so a theme change re-renders this view tree.
+    @AppStorage(CGThemeCatalog.key) private var themeID: String = "mocha"
     @AppStorage("librarySort") private var sortRaw: String = LibrarySort.title.rawValue
     @AppStorage("coverSize") private var coverSizeRaw: String = CoverSize.medium.rawValue
     @AppStorage("useListView") private var useListView: Bool = false
@@ -118,6 +125,12 @@ struct LibraryView: View {
     @State private var creatingCollection = false
     @State private var didRestore = false
     @State private var collapsedSections: Set<String> = []
+    @State private var selectedLibraryID: UUID?
+    @State private var scanTarget: ComicLibrary?
+    @State private var showLabelManager = false
+    @State private var keyboardSelection: UUID?
+    @State private var openAtEnd = false
+    @State private var keyMonitor: Any?
 
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
     private var sort: LibrarySort { LibrarySort(rawValue: sortRaw) ?? .title }
@@ -137,8 +150,14 @@ struct LibraryView: View {
                         withAnimation(.easeInOut(duration: 0.3)) { self.openedItem = nil }
                     },
                     onOpenNext: { next in
+                        openAtEnd = false
                         withAnimation(.easeInOut(duration: 0.3)) { self.openedItem = next }
-                    }
+                    },
+                    onOpenPrevious: { previous in
+                        openAtEnd = true
+                        withAnimation(.easeInOut(duration: 0.3)) { self.openedItem = previous }
+                    },
+                    startAtEnd: openAtEnd
                 )
                 .id(openedItem.id)
                 .transition(.asymmetric(
@@ -150,9 +169,16 @@ struct LibraryView: View {
             }
         }
         .background(CGTheme.base)
-        .onAppear { restoreIfEnabled() }
+        .onAppear {
+            restoreIfEnabled()
+            startKeyMonitor()
+        }
+        .onDisappear { stopKeyMonitor() }
         .onChange(of: route) { _, newValue in persist(newValue) }
-        .task { await ingest.sync(context: context) }
+        .task {
+            ingest.migrateLegacyFolderIfNeeded(context: context)
+            await ingest.syncAll(context: context)
+        }
         .sheet(item: $renameTarget) { series in
             SeriesRenameSheet(series: series) { newName in applyRename(series, to: newName) }
         }
@@ -161,6 +187,14 @@ struct LibraryView: View {
                 source: series,
                 candidates: allSeries.map(\.name).filter { $0 != series.name }
             ) { target in applyRename(series, to: target) }
+        }
+        .sheet(item: $scanTarget) { library in
+            FolderScanSheet(library: library) { folder in
+                Task { await ingest.sync(library: library, subfolder: folder, context: context) }
+            }
+        }
+        .sheet(isPresented: $showLabelManager) {
+            LabelManager()
         }
         .sheet(isPresented: $creatingCollection) {
             SmartCollectionEditor(existing: nil, previewItems: items)
@@ -175,8 +209,11 @@ struct LibraryView: View {
     private func persist(_ route: LibraryRoute) {
         switch route {
         case .filter(let f): lastRouteRaw = "filter:\(f.rawValue)"
+        case .master(let name): lastRouteRaw = "master:\(name)"
         case .series(let name): lastRouteRaw = "series:\(name)"
         case .collection(let id): lastRouteRaw = "collection:\(id.uuidString)"
+        case .label(let id): lastRouteRaw = "label:\(id.uuidString)"
+        case .label(let id): lastRouteRaw = "label:\(id.uuidString)"
         case .stats: lastRouteRaw = "stats"
         }
     }
@@ -190,10 +227,16 @@ struct LibraryView: View {
         switch parts[0] {
         case "filter":
             if let f = LibraryFilter(rawValue: parts[1]) { route = .filter(f) }
+        case "master":
+            route = .master(parts[1])
         case "series":
             route = .series(parts[1])
         case "collection":
             if let id = UUID(uuidString: parts[1]) { route = .collection(id) }
+        case "label":
+            if let id = UUID(uuidString: parts[1]) { route = .label(id) }
+        case "label":
+            if let id = UUID(uuidString: parts[1]) { route = .label(id) }
         default: break
         }
     }
@@ -242,11 +285,13 @@ struct LibraryView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup {
-            if case .series = route, searchQuery.isEmpty {
+            if searchQuery.isEmpty, backDestination != nil {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.22)) { route = .filter(.library) }
+                    withAnimation(.easeInOut(duration: 0.22)) {
+                        if let dest = backDestination { route = dest }
+                    }
                 } label: {
-                    Label("All Series", systemImage: "chevron.left")
+                    Label("Back", systemImage: "chevron.left")
                 }
             }
 
@@ -278,6 +323,11 @@ struct LibraryView: View {
                 Label("Read something", systemImage: "shuffle")
             }
             .help("Open a random unread issue")
+
+            SettingsLink {
+                Label("Settings", systemImage: "gearshape")
+            }
+            .help("Settings (⌘,)")
 
             Button {
                 useListView.toggle()
@@ -316,14 +366,65 @@ struct LibraryView: View {
             }
 
             Menu {
-                Button("Rescan folder") { Task { await ingest.sync(context: context) } }
-                Button("Refresh titles & series") { ingest.refreshMetadata(context: context) }
+                Button("Rescan All Libraries") {
+                    Task { await ingest.syncAll(context: context) }
+                }
+                if let library = activeLibrary {
+                    Button("Rescan \(library.name)") {
+                        Task { await ingest.sync(library: library, context: context) }
+                    }
+                    Button("Scan One Folder…") { scanTarget = library }
+                }
+                Divider()
+                Button("Refresh Titles & Series") {
+                    ingest.refreshMetadata(context: context, library: activeLibrary)
+                }
+                if case .series(let name) = route {
+                    Button("Refresh Titles in \(name)") {
+                        refreshCurrentSeries(name)
+                    }
+                }
             } label: {
                 Label("Library actions", systemImage: "arrow.clockwise")
             } primaryAction: {
-                Task { await ingest.sync(context: context) }
+                Task { await ingest.syncAll(context: context) }
             }
         }
+    }
+
+    /// Where the toolbar back button goes from the current route.
+    private var backDestination: LibraryRoute? {
+        switch route {
+        case .series(let name):
+            // If this series sits under an umbrella, go back to it.
+            if let item = scopedItems.first(where: { $0.seriesKey == name }),
+               item.hasMaster, let master = item.masterSeries, master != name {
+                return .master(master)
+            }
+            return .filter(activeFilter)
+        case .master:
+            return .filter(activeFilter)
+        default:
+            return nil
+        }
+    }
+
+    private var activeLibrary: ComicLibrary? {
+        if let selectedLibraryID {
+            return libraries.first { $0.id == selectedLibraryID }
+        }
+        return libraries.count == 1 ? libraries.first : nil
+    }
+
+    /// Re-parses just the files belonging to one series.
+    private func refreshCurrentSeries(_ name: String) {
+        let members = scopedItems.filter { $0.seriesKey == name }
+        guard let sample = members.first,
+              let libraryID = sample.libraryID,
+              let library = libraries.first(where: { $0.id == libraryID }) else { return }
+        // Narrow to the common parent folder of those files.
+        let folder = URL(fileURLWithPath: sample.filePath).deletingLastPathComponent()
+        ingest.refreshMetadata(context: context, library: library, subfolder: folder)
     }
 
     private var isFilterRoute: Bool {
@@ -348,7 +449,7 @@ struct LibraryView: View {
         } else {
             switch route {
             case .stats:
-                StatsView(items: items)
+                StatsView(items: scopedItems)
 
             case .collection(let id):
                 if let collection = collections.first(where: { $0.id == id }) {
@@ -364,6 +465,40 @@ struct LibraryView: View {
                     }
                 } else {
                     GhostEmptyState(title: "Collection not found", message: "", accent: accent)
+                }
+
+            case .label(let id):
+                let labelItems = sortItems(scopedItems.filter { $0.hasLabel(id) })
+                if labelItems.isEmpty {
+                    GhostEmptyState(
+                        title: "Nothing labelled yet",
+                        message: "Right-click any comic and use the Labels menu to attach this one.",
+                        accent: accent
+                    )
+                } else {
+                    issueCollection(for: labelItems)
+                }
+
+            case .master(let name):
+                let children = series(inMaster: name)
+                if children.count == 1, let only = children.first, only.name == name {
+                    seriesDetail(only)   // umbrella with a single series — skip a level
+                } else if children.isEmpty {
+                    GhostEmptyState(title: "Nothing here", message: "", accent: accent)
+                } else {
+                    seriesGrid(children)
+                }
+
+            case .label(let id):
+                let tagged = sortItems(scopedItems.filter { $0.hasLabel(id) })
+                if tagged.isEmpty {
+                    GhostEmptyState(
+                        title: "Nothing labelled yet",
+                        message: "Right-click any comic and use the Labels menu to tag it.",
+                        accent: accent
+                    )
+                } else {
+                    issueCollection(for: tagged)
                 }
 
             case .series(let name):
@@ -383,12 +518,12 @@ struct LibraryView: View {
     private func filterContent(_ f: LibraryFilter) -> some View {
         if f == .readingList {
             readingListContent
-        } else if seriesList.isEmpty {
+        } else if masterGroups.isEmpty {
             emptyState
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 if f == .library, !continueReading.isEmpty { continueShelf }
-                seriesGrid
+                seriesGrid(masterGroups)
             }
         }
     }
@@ -559,9 +694,13 @@ struct LibraryView: View {
         if !searchQuery.isEmpty { return "Search" }
         switch route {
         case .stats: return "Stats"
+        case .label(let id): return labels.first { $0.id == id }?.name ?? "Label"
+        case .master(let name): return name
         case .series(let name): return name
         case .collection(let id):
             return collections.first(where: { $0.id == id })?.name ?? "Collection"
+        case .label(let id):
+            return allLabels.first(where: { $0.id == id })?.name ?? "Label"
         case .filter(let f): return f == .library ? "Comic Ghost" : f.rawValue
         }
     }
@@ -570,6 +709,10 @@ struct LibraryView: View {
         if case .series(let name) = route,
            let series = allSeries.first(where: { $0.name == name }) {
             return series.coverPath
+        }
+        if case .master(let name) = route,
+           let group = masterGroups.first(where: { $0.name == name }) {
+            return group.coverPath
         }
         return filteredItems.first?.coverThumbnailPath ?? items.first?.coverThumbnailPath
     }
@@ -643,7 +786,9 @@ struct LibraryView: View {
         VStack(spacing: 6) {
             HStack {
                 ProgressView().controlSize(.small)
-                Text("Importing \(ingest.processed) of \(ingest.total)")
+                Text(ingest.scopeLabel.isEmpty
+                     ? "Importing \(ingest.processed) of \(ingest.total)"
+                     : "\(ingest.scopeLabel): \(ingest.processed) of \(ingest.total)")
                     .font(.callout).foregroundStyle(CGTheme.text)
                 Spacer()
             }
@@ -667,6 +812,19 @@ struct LibraryView: View {
     private var sidebar: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
+                if libraries.count > 1 {
+                    sidebarLabel("Libraries")
+                    libraryRow(nil, name: "All Libraries", count: items.count)
+                    ForEach(libraries) { library in
+                        libraryRow(
+                            library.id,
+                            name: library.name,
+                            count: items.filter { $0.libraryID == library.id }.count
+                        )
+                    }
+                    Spacer().frame(height: 10)
+                }
+
                 sidebarLabel("Library")
                 ForEach(LibraryFilter.allCases) { f in filterRow(f) }
 
@@ -704,6 +862,8 @@ struct LibraryView: View {
                     .buttonStyle(.plain)
                 }
 
+                labelsSection
+
                 seriesSection
 
                 sidebarLabel("Insights").padding(.top, 10)
@@ -717,6 +877,101 @@ struct LibraryView: View {
         .scrollContentBackground(.hidden)
         .frame(minWidth: 220)
         .glassPanel(enabled: glassEnabled, fallback: CGTheme.mantle)
+    }
+
+    /// Favorite labels get their own rows; the rest live behind Manage.
+    private var labelsSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                sidebarLabel("Labels")
+                Spacer()
+                Button { showLabelManager = true } label: {
+                    Image(systemName: "gearshape")
+                        .font(.caption)
+                        .foregroundStyle(CGTheme.subtext0)
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 12)
+            }
+
+            if allLabels.isEmpty {
+                Button { showLabelManager = true } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "tag").frame(width: 18)
+                        Text("New label")
+                        Spacer()
+                    }
+                    .font(.body)
+                    .foregroundStyle(CGTheme.subtext0)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                ForEach(sortedLabels) { label in
+                    labelRow(label)
+                }
+            }
+        }
+        .padding(.top, 10)
+    }
+
+    private var sortedLabels: [ComicLabel] {
+        allLabels.sorted {
+            if $0.isFavorite != $1.isFavorite { return $0.isFavorite }
+            if $0.sortIndex != $1.sortIndex { return $0.sortIndex < $1.sortIndex }
+            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+
+    private func labelRow(_ label: ComicLabel) -> some View {
+        let isSelected: Bool = {
+            if case .label(let id) = route { return id == label.id }
+            return false
+        }()
+        let count = scopedItems.filter { $0.hasLabel(label.id) }.count
+
+        return Button {
+            route = .label(label.id)
+        } label: {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(label.color)
+                    .frame(width: 10, height: 10)
+                    .frame(width: 18)
+                if label.isFavorite {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(CGTheme.peach)
+                }
+                Text(label.name).lineLimit(1)
+                Spacer()
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(CGTheme.subtext0)
+                }
+            }
+            .font(.body)
+            .foregroundStyle(isSelected ? CGTheme.text : CGTheme.subtext1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? CGTheme.surface0.opacity(glassEnabled ? 0.7 : 1) : .clear)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(label.isFavorite ? "Unfavorite Label" : "Favorite Label") {
+                label.isFavorite.toggle()
+                try? context.save()
+            }
+            Button("Manage Labels…") { showLabelManager = true }
+        }
     }
 
     /// Collapsible list of every series, for direct navigation.
@@ -834,6 +1089,50 @@ struct LibraryView: View {
         }
     }
 
+    private func libraryRow(_ id: UUID?, name: String, count: Int) -> some View {
+        let isSelected = selectedLibraryID == id
+        return Button {
+            selectedLibraryID = id
+            route = .filter(.library)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: id == nil ? "square.stack.3d.up" : "folder")
+                    .frame(width: 18)
+                    .foregroundStyle(isSelected ? accent : CGTheme.subtext1)
+                Text(name).lineLimit(1)
+                Spacer()
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(CGTheme.subtext0)
+                }
+            }
+            .font(.body)
+            .foregroundStyle(isSelected ? CGTheme.text : CGTheme.subtext1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? CGTheme.surface0.opacity(glassEnabled ? 0.7 : 1) : .clear)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if let id, let library = libraries.first(where: { $0.id == id }) {
+                Button("Rescan This Library") {
+                    Task { await ingest.sync(library: library, context: context) }
+                }
+                Button("Refresh Titles in This Library") {
+                    ingest.refreshMetadata(context: context, library: library)
+                }
+                Divider()
+                Button("Scan One Folder…") { scanTarget = library }
+            }
+        }
+    }
+
     private func sidebarLabel(_ text: String) -> some View {
         Text(text.uppercased())
             .font(.system(size: 10, weight: .semibold))
@@ -917,7 +1216,14 @@ struct LibraryView: View {
         }
     }
 
+    /// Items in the active library (or all libraries when none is selected).
+    private var scopedItems: [LibraryItem] {
+        guard let selectedLibraryID else { return items }
+        return items.filter { $0.libraryID == selectedLibraryID }
+    }
+
     private var filteredItems: [LibraryItem] {
+        let items = scopedItems
         switch activeFilter {
         case .library: return items
         case .new: return items.filter { $0.status == .new }
@@ -944,9 +1250,24 @@ struct LibraryView: View {
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    /// Every series in the library (used by the sidebar list).
+    /// Every series in the active library (used by the sidebar list).
     private var allSeries: [Series] {
-        Dictionary(grouping: items, by: \.seriesKey)
+        Dictionary(grouping: scopedItems, by: \.seriesKey)
+            .map { Series(name: $0.key, items: $0.value) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// Top-level groups: umbrella folders plus standalone series.
+    private var masterGroups: [Series] {
+        Dictionary(grouping: filteredItems, by: \.masterKey)
+            .map { Series(name: $0.key, items: $0.value) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// Series inside one umbrella folder.
+    private func series(inMaster master: String) -> [Series] {
+        let members = filteredItems.filter { $0.masterKey == master }
+        return Dictionary(grouping: members, by: \.seriesKey)
             .map { Series(name: $0.key, items: $0.value) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
@@ -989,48 +1310,175 @@ struct LibraryView: View {
         [GridItem(.adaptive(minimum: coverSize.minWidth, maximum: coverSize.maxWidth), spacing: 20)]
     }
 
-    private var seriesGrid: some View {
+    private func seriesGrid(_ groups: [Series]) -> some View {
         LazyVGrid(columns: columns, spacing: 26) {
-            ForEach(seriesList) { series in
+            ForEach(groups) { group in
                 SeriesCard(
-                    series: series,
+                    series: group,
                     allItems: items,
-                    onRename: { renameTarget = series },
-                    onMerge: { mergeSource = series }
+                    subSeriesCount: subSeriesCount(for: group),
+                    onRename: { renameTarget = group },
+                    onMerge: { mergeSource = group }
                 )
                 .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.22)) { route = .series(series.name) }
+                    withAnimation(.easeInOut(duration: 0.22)) {
+                        route = destination(for: group)
+                    }
                 }
             }
         }
         .padding()
     }
 
+    /// How many distinct series live under this tile (1 = a plain series).
+    private func subSeriesCount(for group: Series) -> Int {
+        Set(group.items.map(\.seriesKey)).count
+    }
+
+    private func destination(for group: Series) -> LibraryRoute {
+        subSeriesCount(for: group) > 1 ? .master(group.name) : .series(group.name)
+    }
+
+    /// Items currently rendered as an issue grid, for keyboard navigation.
+    @State private var navigableItems: [LibraryItem] = []
+    @State private var gridColumnCount: Int = 1
+
+    private func moveSelection(by delta: Int) {
+        guard !navigableItems.isEmpty else { return }
+        let currentIndex = navigableItems.firstIndex { $0.id == keyboardSelection } ?? -1
+        let next = currentIndex < 0
+            ? (delta > 0 ? 0 : navigableItems.count - 1)
+            : min(max(currentIndex + delta, 0), navigableItems.count - 1)
+        keyboardSelection = navigableItems[next].id
+    }
+
+    private func openSelection() {
+        guard let id = keyboardSelection,
+              let item = navigableItems.first(where: { $0.id == id }) else { return }
+        withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+    }
+
+    /// Arrow-key handling via a local event monitor.
+    ///
+    /// `.focusable()` + `.onKeyPress` never fired here: inside a
+    /// NavigationSplitView the detail pane doesn't take first responder, so the
+    /// grid was never focused. A monitor sidesteps focus entirely — it just
+    /// declines the event whenever a text field is being edited.
+    private func startKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Never intercept typing.
+            if let responder = NSApp.keyWindow?.firstResponder,
+               responder is NSTextView || responder is NSTextField {
+                return event
+            }
+            // The reader has its own shortcuts.
+            guard openedItem == nil, !navigableItems.isEmpty else { return event }
+            // Let modified keys through (⌘F, ⌘Z, and friends).
+            guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty else {
+                return event
+            }
+
+            switch event.keyCode {
+            case 123: moveSelection(by: -1); return nil                       // left
+            case 124: moveSelection(by: 1); return nil                        // right
+            case 126: moveSelection(by: useListView ? -1 : -gridColumnCount); return nil  // up
+            case 125: moveSelection(by: useListView ? 1 : gridColumnCount); return nil    // down
+            case 36, 76:                                                      // return / enter
+                guard keyboardSelection != nil else { return event }
+                openSelection()
+                return nil
+            case 53:                                                          // escape
+                guard keyboardSelection != nil else { return event }
+                keyboardSelection = nil
+                return nil
+            default: return event
+            }
+        }
+    }
+
+    private func stopKeyMonitor() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+    }
+
     @ViewBuilder
     private func issueCollection(for list: [LibraryItem]) -> some View {
         if useListView {
-            LazyVStack(spacing: 2) {
-                ForEach(list) { item in
-                    LibraryItemRow(item: item, allItems: items)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+            ScrollViewReader { proxy in
+                LazyVStack(spacing: 2) {
+                        ForEach(list) { item in
+                            LibraryItemRow(item: item, allItems: items)
+                                .id(item.id)
+                                .background {
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .strokeBorder(
+                                            keyboardSelection == item.id ? accent : .clear,
+                                            lineWidth: 2
+                                        )
+                                }
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    keyboardSelection = item.id
+                                    openAtEnd = false
+                                    withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+                                }
                         }
+                    }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .onAppear { navigableItems = list }
+                .onChange(of: list.map(\.id)) { _, _ in navigableItems = list }
+                .onChange(of: keyboardSelection) { _, newValue in
+                    if let newValue { withAnimation { proxy.scrollTo(newValue, anchor: .center) } }
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
         } else {
-            LazyVGrid(columns: columns, spacing: 24) {
-                ForEach(list) { item in
-                    LibraryItemCell(item: item, allItems: items, coverHeight: coverSize.coverHeight)
-                        .onTapGesture {
-                            withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+            ScrollViewReader { proxy in
+                LazyVGrid(columns: columns, spacing: 24) {
+                        ForEach(list) { item in
+                            LibraryItemCell(item: item, allItems: items, coverHeight: coverSize.coverHeight)
+                                .id(item.id)
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .strokeBorder(
+                                            keyboardSelection == item.id ? accent : .clear,
+                                            lineWidth: 2
+                                        )
+                                        .padding(-4)
+                                }
+                                .onTapGesture {
+                                    keyboardSelection = item.id
+                                    openAtEnd = false
+                                    withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+                                }
+                        }
+                    }
+                    .padding()
+                    // Measured in the background so it can't affect layout —
+                    // a GeometryReader in the flow collapses inside a ScrollView.
+                    .background {
+                        GeometryReader { geo in
+                            Color.clear
+                                .onAppear { gridColumnCount = columnCount(for: geo.size.width) }
+                                .onChange(of: geo.size.width) { _, width in
+                                    gridColumnCount = columnCount(for: width)
+                                }
                         }
                 }
+                .onAppear { navigableItems = list }
+                .onChange(of: list.map(\.id)) { _, _ in navigableItems = list }
+                .onChange(of: keyboardSelection) { _, newValue in
+                    if let newValue { withAnimation { proxy.scrollTo(newValue, anchor: .center) } }
+                }
             }
-            .padding()
         }
+    }
+
+    /// Approximate column count for arrow-key row jumps.
+    private func columnCount(for width: CGFloat) -> Int {
+        let cell = coverSize.minWidth + 20
+        return max(Int((width - 32) / cell), 1)
     }
 
     private var emptyState: some View {
@@ -1164,4 +1612,86 @@ struct SeriesMergeSheet: View {
 #Preview {
     LibraryView()
         .modelContainer(for: [LibraryItem.self, ReadingProgress.self, SmartCollection.self], inMemory: true)
+}
+
+// MARK: - Folder scan sheet
+
+/// Pick one subfolder of a library to scan, instead of walking the whole thing.
+struct FolderScanSheet: View {
+    let library: ComicLibrary
+    var onScan: (URL) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage(CGAccent.key) private var accentRaw: String = CGAccent.mauve.rawValue
+
+    @State private var folders: [URL] = []
+    @State private var selection: URL?
+
+    private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Scan One Folder")
+                .font(.headline)
+                .foregroundStyle(CGTheme.text)
+
+            Text("Only this folder is scanned — everything else in \(library.name) is left alone.")
+                .font(.caption)
+                .foregroundStyle(CGTheme.subtext0)
+
+            if folders.isEmpty {
+                Text("No subfolders found.")
+                    .font(.callout)
+                    .foregroundStyle(CGTheme.subtext0)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                List(folders, id: \.self, selection: $selection) { folder in
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder").foregroundStyle(accent)
+                        Text(folder.lastPathComponent).foregroundStyle(CGTheme.text)
+                    }
+                    .tag(folder)
+                }
+                .frame(height: 260)
+                .scrollContentBackground(.hidden)
+            }
+
+            HStack {
+                Button("Choose Another Folder…") { pickManually() }
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.escape, modifiers: [])
+                Button("Scan") {
+                    if let selection { onScan(selection) }
+                    dismiss()
+                }
+                .keyboardShortcut(.return, modifiers: [])
+                .buttonStyle(.borderedProminent)
+                .tint(accent)
+                .disabled(selection == nil)
+            }
+        }
+        .padding(22)
+        .frame(width: 460)
+        .background(CGTheme.base)
+        .onAppear {
+            if let root = library.resolveURL() {
+                folders = LibraryFolder.topLevelFolders(in: root)
+                selection = folders.first
+            }
+        }
+    }
+
+    private func pickManually() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = library.resolveURL()
+        panel.prompt = "Scan This Folder"
+        if panel.runModal() == .OK, let url = panel.url {
+            onScan(url)
+            dismiss()
+        }
+    }
 }

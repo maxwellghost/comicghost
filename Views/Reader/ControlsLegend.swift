@@ -18,6 +18,12 @@ struct ControlsLegend: View {
             ("plus.forwardslash.minus", "⌘+ ⌘− ⌘0", "Zoom in / out / fit"),
             ("arrow.left.and.right.square", "F", "Fit page / fit width"),
             ("book", "S", "Single page / spread"),
+            ("scroll", "C", "Paged / continuous scroll"),
+            ("bookmark", "B", "Bookmark this page"),
+            ("slider.horizontal.3", "I", "Image adjustments"),
+            ("magnifyingglass.circle", "L", "Floating magnifier"),
+            ("eye.slash", "H", "Hide / show controls"),
+            ("hand.draw", "Swipe", "Turn pages on trackpad"),
             ("character.book.closed.ja", "M", "Manga mode (right-to-left)"),
             ("rectangle.grid.1x2", "T", "Page thumbnails"),
             ("arrow.up.left.and.arrow.down.right", "⌃⌘F", "Full screen"),
@@ -82,6 +88,8 @@ struct ControlsLegend: View {
 struct PageTurnHint: View {
     let symbol: String
     var isVisible: Bool
+    /// Shown but faded, for the always-visible edges setting.
+    var dimmed: Bool = false
 
     var body: some View {
         Image(systemName: symbol)
@@ -89,8 +97,9 @@ struct PageTurnHint: View {
             .foregroundStyle(CGTheme.text.opacity(0.85))
             .padding(14)
             .background { Circle().fill(.ultraThinMaterial) }
-            .softGlow(CGTheme.mauve, radius: 10, isActive: isVisible)
-            .opacity(isVisible ? 1 : 0)
+            .softGlow(CGTheme.mauve, radius: 10, isActive: isVisible && !dimmed)
+            .opacity(isVisible ? (dimmed ? 0.35 : 1) : 0)
             .animation(.easeOut(duration: 0.18), value: isVisible)
+            .animation(.easeOut(duration: 0.18), value: dimmed)
     }
 }

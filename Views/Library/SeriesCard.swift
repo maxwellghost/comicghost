@@ -5,6 +5,8 @@ import SwiftData
 struct SeriesCard: View {
     let series: Series
     var allItems: [LibraryItem] = []
+    /// >1 means this tile is an umbrella folder containing several series.
+    var subSeriesCount: Int = 1
     var onRename: () -> Void = {}
     var onMerge: () -> Void = {}
 
@@ -16,15 +18,25 @@ struct SeriesCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .topTrailing) {
-                stackedCovers
-                if series.newCount > 0 {
-                    Text("\(series.newCount) NEW")
-                        .font(.caption2.weight(.semibold))
+            ZStack(alignment: .topLeading) {
+                ZStack(alignment: .topTrailing) {
+                    stackedCovers
+                    if series.newCount > 0 {
+                        Text("\(series.newCount) NEW")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(CGTheme.crust)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(CGTheme.peach, in: Capsule())
+                            .padding(6)
+                    }
+                }
+                if subSeriesCount > 1 {
+                    Image(systemName: "square.stack")
+                        .font(.caption)
                         .foregroundStyle(CGTheme.crust)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(CGTheme.peach, in: Capsule())
+                        .padding(5)
+                        .background(CGTheme.lavender, in: Circle())
                         .padding(6)
                 }
             }
@@ -34,7 +46,9 @@ struct SeriesCard: View {
                 .foregroundStyle(CGTheme.text)
                 .lineLimit(2)
 
-            Text(series.subtitle)
+            Text(subSeriesCount > 1
+                 ? "\(subSeriesCount) series · \(series.items.count) issues"
+                 : series.subtitle)
                 .font(.caption)
                 .foregroundStyle(CGTheme.subtext0)
 
@@ -191,8 +205,15 @@ struct Series: Identifiable {
 
     var id: String { name }
 
+    /// Cover comes from the earliest issue of the main run (issue 1 / volume 1),
+    /// falling back to specials only if there's nothing else.
     var coverPath: String? {
-        items.first(where: { $0.coverThumbnailPath != nil })?.coverThumbnailPath
+        let ordered = items
+            .sorted {
+                if $0.isSpecial != $1.isSpecial { return !$0.isSpecial }
+                return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+            }
+        return ordered.first(where: { $0.coverThumbnailPath != nil })?.coverThumbnailPath
     }
 
     var readCount: Int {

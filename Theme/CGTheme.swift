@@ -1,31 +1,36 @@
 import SwiftUI
 
 /// Catppuccin Mocha palette + shared style helpers for Comic Ghost.
+/// Palette for the active theme. Every colour reads from the current
+/// selection, so switching themes recolours the whole app.
 enum CGTheme {
-    static let crust  = Color(hex: 0x11111b)
-    static let mantle = Color(hex: 0x181825)
-    static let base   = Color(hex: 0x1e1e2e)
-    static let surface0 = Color(hex: 0x313244)
-    static let surface1 = Color(hex: 0x45475a)
+    private static var t: CGThemeDefinition { CGThemeCatalog.current }
 
-    static let text     = Color(hex: 0xcdd6f4)
-    static let subtext1 = Color(hex: 0xbac2de)
-    static let subtext0 = Color(hex: 0xa6adc8)
+    static var crust: Color    { Color(hex: t.crust) }
+    static var mantle: Color   { Color(hex: t.mantle) }
+    static var base: Color     { Color(hex: t.base) }
+    static var surface0: Color { Color(hex: t.surface0) }
+    static var surface1: Color { Color(hex: t.surface1) }
 
-    static let mauve    = Color(hex: 0xcba6f7)
-    static let lavender = Color(hex: 0xb4befe)
-    static let pink     = Color(hex: 0xf5c2e7)
-    static let sky      = Color(hex: 0x89dceb)
-    static let sapphire = Color(hex: 0x74c7ec)
-    static let green    = Color(hex: 0xa6e3a1)
-    static let red      = Color(hex: 0xf38ba8)
-    static let peach    = Color(hex: 0xfab387)
-    static let teal     = Color(hex: 0x94e2d5)
+    static var text: Color     { Color(hex: t.text) }
+    static var subtext1: Color { Color(hex: t.subtext1) }
+    static var subtext0: Color { Color(hex: t.subtext0) }
+
+    static var mauve: Color    { Color(hex: t.mauve) }
+    static var lavender: Color { Color(hex: t.lavender) }
+    static var pink: Color     { Color(hex: t.pink) }
+    static var sky: Color      { Color(hex: t.sky) }
+    static var sapphire: Color { Color(hex: t.sapphire) }
+    static var green: Color    { Color(hex: t.green) }
+    static var red: Color      { Color(hex: t.red) }
+    static var peach: Color    { Color(hex: t.peach) }
+    static var teal: Color     { Color(hex: t.teal) }
+
+    /// Whether the active theme is a dark one — drives colour scheme.
+    static var isDark: Bool { t.isDark }
 
     /// Current accent, resolved from user preference.
-    static var accent: Color {
-        CGAccent.current.color
-    }
+    static var accent: Color { CGAccent.current.color }
 }
 
 /// User-selectable accent color.

@@ -3,18 +3,28 @@ import SwiftData
 
 @main
 struct ComicGhostApp: App {
+    /// Reading the stored theme here means changing it re-renders everything,
+    /// since CGTheme's colours are computed from the current selection.
+    @AppStorage(CGThemeCatalog.key) private var themeID: String = "mocha"
+
+    private var theme: CGThemeDefinition {
+        CGThemeCatalog.all.first { $0.id == themeID } ?? CGThemeCatalog.all[0]
+    }
+
     var body: some Scene {
         WindowGroup {
             LibraryView()
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(theme.isDark ? .dark : .light)
                 .background(CGTheme.base)
+                .tint(CGTheme.accent)
         }
         .modelContainer(ModelContainerSetup.shared)
         .windowStyle(.automatic)
 
         Settings {
             SettingsView()
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(theme.isDark ? .dark : .light)
+                .tint(CGTheme.accent)
         }
     }
 }

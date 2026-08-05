@@ -9,14 +9,21 @@ struct LibraryItemCell: View {
 
     @Environment(\.modelContext) private var context
     @AppStorage(CGAccent.key) private var accentRaw: String = CGAccent.mauve.rawValue
+    @Query(sort: \ComicLabel.sortIndex) private var allLabels: [ComicLabel]
 
     @State private var isHovering = false
     @State private var showEditSheet = false
     @State private var showRemoveConfirm = false
     @State private var cover: NSImage?
     @State private var didAttemptLoad = false
+    @State private var showLabelManager = false
 
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
+
+    private var attachedLabels: [ComicLabel] {
+        let ids = Set(item.labelIDs)
+        return allLabels.filter { ids.contains($0.id) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -26,6 +33,19 @@ struct LibraryItemCell: View {
                 .font(.callout)
                 .foregroundStyle(CGTheme.text)
                 .lineLimit(2)
+
+            if !attachedLabels.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(attachedLabels.prefix(3)) { label in
+                        LabelChip(label: label)
+                    }
+                    if attachedLabels.count > 3 {
+                        Text("+\(attachedLabels.count - 3)")
+                            .font(.system(size: 9))
+                            .foregroundStyle(CGTheme.subtext0)
+                    }
+                }
+            }
 
             if item.rating > 0 || isHovering {
                 StarRating(rating: Binding(
@@ -44,8 +64,10 @@ struct LibraryItemCell: View {
         .animation(.easeOut(duration: 0.18), value: isHovering)
         .contextMenu { ItemContextMenu(item: item, allItems: allItems,
                                        showEditSheet: $showEditSheet,
-                                       showRemoveConfirm: $showRemoveConfirm) }
+                                       showRemoveConfirm: $showRemoveConfirm,
+                                       showLabelManager: $showLabelManager) }
         .sheet(isPresented: $showEditSheet) { EditInfoSheet(item: item) }
+        .sheet(isPresented: $showLabelManager) { LabelManager() }
         .confirmationDialog(
             "Remove “\(item.title)”?",
             isPresented: $showRemoveConfirm,
@@ -169,9 +191,16 @@ struct LibraryItemRow: View {
 
     @Environment(\.modelContext) private var context
     @AppStorage(CGAccent.key) private var accentRaw: String = CGAccent.mauve.rawValue
+    @Query(sort: \ComicLabel.sortIndex) private var allLabels: [ComicLabel]
     @State private var isHovering = false
     @State private var showEditSheet = false
     @State private var showRemoveConfirm = false
+    @State private var showLabelManager = false
+
+    private var rowLabels: [ComicLabel] {
+        let ids = Set(item.labelIDs)
+        return allLabels.filter { ids.contains($0.id) }
+    }
 
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
 
@@ -192,6 +221,12 @@ struct LibraryItemRow: View {
                 .foregroundStyle(CGTheme.text)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 3) {
+                ForEach(rowLabels.prefix(4)) { label in
+                    LabelChip(label: label, compact: true)
+                }
+            }
 
             if item.isSpecial {
                 Image(systemName: "star.square.fill")
@@ -239,8 +274,10 @@ struct LibraryItemRow: View {
         .onHover { isHovering = $0 }
         .contextMenu { ItemContextMenu(item: item, allItems: allItems,
                                        showEditSheet: $showEditSheet,
-                                       showRemoveConfirm: $showRemoveConfirm) }
+                                       showRemoveConfirm: $showRemoveConfirm,
+                                       showLabelManager: $showLabelManager) }
         .sheet(isPresented: $showEditSheet) { EditInfoSheet(item: item) }
+        .sheet(isPresented: $showLabelManager) { LabelManager() }
         .confirmationDialog(
             "Remove “\(item.title)”?",
             isPresented: $showRemoveConfirm,
@@ -278,7 +315,9 @@ struct ItemContextMenu: View {
     let allItems: [LibraryItem]
     @Binding var showEditSheet: Bool
     @Binding var showRemoveConfirm: Bool
+    @Binding var showLabelManager: Bool
     @Environment(\.modelContext) private var context
+    @Query(sort: \ComicLabel.sortIndex) private var labels: [ComicLabel]
 
     var body: some View {
         Button {
@@ -304,6 +343,13 @@ struct ItemContextMenu: View {
                 Label("Add to Reading List", systemImage: "text.badge.plus")
             }
         }
+
+        LabelPickerMenu(
+            items: [item],
+            labels: labels,
+            onManage: { showLabelManager = true },
+            onChange: { try? context.save() }
+        )
 
         Divider()
 
