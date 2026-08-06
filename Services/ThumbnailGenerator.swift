@@ -31,6 +31,35 @@ nonisolated enum ThumbnailGenerator {
         return cached
     }
 
+    /// Rebuilds the thumbnail from a specific page.
+    ///
+    /// Unlike the fast path above this does unpack the archive, so it's only
+    /// ever driven by an explicit "use this page as the cover" action.
+    static func regenerate(for itemID: UUID,
+                           archivePath: String,
+                           pageIndex: Int,
+                           maxDimension: CGFloat = 500) throws -> URL {
+        let cached = cachedPath(for: itemID)
+        try? FileManager.default.removeItem(at: cached)
+
+        let archiveURL = URL(fileURLWithPath: archivePath)
+        let extractor = try ArchiveExtractorRouter.extractor(for: archiveURL)
+
+        let data: Data
+        if pageIndex <= 0 {
+            data = try extractor.coverImageData(from: archiveURL)
+        } else {
+            let pages = try extractor.extractPages(from: archiveURL)
+            guard pages.indices.contains(pageIndex) else {
+                throw ArchiveError.extractionFailed("Page \(pageIndex + 1) isn't in this file")
+            }
+            data = try Data(contentsOf: pages[pageIndex].imageURL)
+        }
+
+        try downscale(data: data, to: cached, maxDimension: maxDimension)
+        return cached
+    }
+
     private static func downscale(data: Data, to destination: URL, maxDimension: CGFloat) throws {
         guard let imageSource = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw ArchiveError.extractionFailed("Couldn't read cover image")

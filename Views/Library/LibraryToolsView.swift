@@ -12,6 +12,7 @@ struct LibraryToolsView: View {
     @AppStorage(CGAccent.key) private var accentRaw: String = CGAccent.mauve.rawValue
     @Query(sort: \IgnoredFile.dateIgnored, order: .reverse) private var ignored: [IgnoredFile]
     @State private var analysis = LibraryAnalysis.shared
+    @State private var converter = BatchConverter.shared
     @State private var exportMessage: String?
 
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
@@ -37,11 +38,88 @@ struct LibraryToolsView: View {
             ignoredSection
             storageSection
             integritySection
+            convertSection
             exportSection
         }
         .padding()
         .frame(maxWidth: 820, alignment: .leading)
         .frame(maxWidth: .infinity)
+    }
+
+    private var convertSection: some View {
+        let candidates = converter.candidates(in: items)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            header("Convert to CBZ",
+                   "CBR and 7z open by launching a helper tool every time. CBZ reads in-process.",
+                   systemImage: "arrow.triangle.2.circlepath")
+
+            if converter.isRunning {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("\(converter.processed) of \(converter.total)")
+                            .font(.callout.monospacedDigit())
+                            .foregroundStyle(CGTheme.text)
+                        Spacer()
+                        Button("Stop") { converter.cancel() }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(CGTheme.red)
+                    }
+                    ProgressView(value: converter.progressFraction).tint(accent)
+                    Text(converter.currentName.isEmpty
+                         ? converter.stage
+                         : "\(converter.stage) · \(converter.currentName)")
+                        .font(.caption)
+                        .foregroundStyle(CGTheme.subtext0)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            } else if candidates.isEmpty {
+                Text("Everything is already CBZ or PDF.")
+                    .font(.callout)
+                    .foregroundStyle(CGTheme.subtext0)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("\(candidates.count) file\(candidates.count == 1 ? "" : "s") can be converted.")
+                        .font(.callout)
+                        .foregroundStyle(CGTheme.text)
+                    Text("Each original moves to the Trash once its replacement is verified. Page order and folder structure are preserved, and existing ComicInfo.xml is carried across. This is slow — expect roughly a second per issue, more for large files.")
+                        .font(.caption)
+                        .foregroundStyle(CGTheme.subtext0)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Convert \(candidates.count) to CBZ") {
+                        converter.run(items, context: context)
+                    }
+                }
+            }
+
+            if let summary = converter.lastSummary {
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(CGTheme.subtext0)
+            }
+
+            if !converter.failures.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(converter.failures) { failure in
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(failure.name)
+                                .font(.caption)
+                                .foregroundStyle(CGTheme.text)
+                                .lineLimit(1)
+                            Text(failure.reason)
+                                .font(.caption2)
+                                .foregroundStyle(CGTheme.red)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background { card }
     }
 
     private var card: some View {

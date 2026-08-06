@@ -49,6 +49,7 @@ struct SmartRule: Codable, Identifiable, Hashable {
 
     enum Field: String, Codable, CaseIterable, Identifiable {
         case series, title, status, rating, favorite, special, queued, pageCount, dateAdded
+        case creator, character, publisher, storyArc, genre
 
         var id: String { rawValue }
 
@@ -63,12 +64,18 @@ struct SmartRule: Codable, Identifiable, Hashable {
             case .queued: return "In reading list"
             case .pageCount: return "Page count"
             case .dateAdded: return "Date added"
+            case .creator: return "Creator"
+            case .character: return "Character or team"
+            case .publisher: return "Publisher"
+            case .storyArc: return "Story arc"
+            case .genre: return "Genre"
             }
         }
 
         var kind: Kind {
             switch self {
             case .series, .title: return .text
+            case .creator, .character, .publisher, .storyArc, .genre: return .text
             case .status: return .status
             case .rating, .pageCount: return .number
             case .favorite, .special, .queued: return .boolean
@@ -126,6 +133,16 @@ struct SmartRule: Codable, Identifiable, Hashable {
             return boolMatch(item.isSpecial)
         case .queued:
             return boolMatch(item.isQueued)
+        case .creator:
+            return listMatch(item.creators)
+        case .character:
+            return listMatch(item.characters + item.teams)
+        case .publisher:
+            return textMatch(item.publisherName ?? "")
+        case .storyArc:
+            return textMatch(item.storyArcName ?? "")
+        case .genre:
+            return listMatch(item.genres)
         case .dateAdded:
             guard let days = Double(value) else { return true }
             let age = Date.now.timeIntervalSince(item.dateAdded) / 86400
@@ -143,6 +160,23 @@ struct SmartRule: Codable, Identifiable, Hashable {
         case .unread: return "Unread"
         case .inProgress: return "In Progress"
         case .completed: return "Completed"
+        }
+    }
+
+    /// Any-of semantics for multi-value fields: "contains" matches when one
+    /// entry does, "doesn't contain" only when none do.
+    private func listMatch(_ subjects: [String]) -> Bool {
+        switch comparison {
+        case .contains:
+            return subjects.contains { $0.localizedCaseInsensitiveContains(value) }
+        case .notContains:
+            return !subjects.contains { $0.localizedCaseInsensitiveContains(value) }
+        case .equals:
+            return subjects.contains { $0.compare(value, options: .caseInsensitive) == .orderedSame }
+        case .notEquals:
+            return !subjects.contains { $0.compare(value, options: .caseInsensitive) == .orderedSame }
+        default:
+            return true
         }
     }
 

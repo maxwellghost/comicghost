@@ -29,24 +29,54 @@ final class LibraryIngest {
         let path: String
         let title: String
         let seriesName: String?
-        let masterSeries: String?
         let issueNumber: String?
         let pageCount: Int
         let isSpecial: Bool
         let thumbnailPath: String?
+        let chaptersRaw: String
+        let extras: ComicInfoExtras
     }
+
+    /// Everything worth indexing out of ComicInfo beyond series and number.
+    nonisolated struct ComicInfoExtras: Sendable {
+        var creditsRaw = ""
+        var charactersRaw = ""
+        var teamsRaw = ""
+        var genresRaw = ""
+        var storyArc: String?
+        var publisher: String?
+        var seriesGroup: String?
+
+        static let empty = ComicInfoExtras()
+    }
+
+    /// UserDefaults key holding the id of the most recent import, so the
+    /// library can offer a review pass over just those items.
+    /// nonisolated so `@AppStorage` can reach it from a property initializer.
+    nonisolated static let lastImportBatchKey = "lastImportBatch"
 
     // MARK: - Path helpers
 
     private nonisolated static func comicFiles(under root: URL) -> [URL] {
         guard let enumerator = FileManager.default.enumerator(
             at: root,
-            includingPropertiesForKeys: [.isRegularFileKey],
+            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else { return [] }
 
         var found: [URL] = []
         for case let url as URL in enumerator {
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+            if values?.isDirectory == true {
+                // A folder of loose images is one comic, so it gets added and
+                // then sealed off — descending would turn every page into an
+                // entry of its own.
+                if ArchiveSupport.qualifiesAsLooseComic(url) {
+                    found.append(url)
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
             guard ComicArchive.Format(fileExtension: url.pathExtension) != nil else { continue }
             found.append(url)
         }
@@ -77,27 +107,70 @@ final class LibraryIngest {
         let id = UUID()
         let chain = folderChain(for: fileURL, root: root)
         let seriesHint = chain.last
-        // Anything above the immediate folder becomes the master grouping.
-        let master = chain.count >= 2 ? chain[chain.count - 2] : nil
 
         let parsed = MetadataParser.metadata(for: fileURL, folderHint: seriesHint)
         let extractor = try? ArchiveExtractorRouter.extractor(for: fileURL)
         let count = (try? extractor?.pageCount(of: fileURL)) ?? 0
         let thumb = try? ThumbnailGenerator.thumbnail(for: id, archivePath: fileURL.path)
+        let parsed_info = comicInfoDetails(in: fileURL)
 
         return ScannedFile(
             id: id,
             path: fileURL.path,
             title: parsed.title,
             seriesName: parsed.seriesName,
-            masterSeries: master.map(MetadataParser.cleanSeriesName),
             issueNumber: parsed.issueNumber,
-            pageCount: count ?? 0,
+            pageCount: count,
             isSpecial: MetadataParser.looksSpecial(
                 issueNumber: parsed.issueNumber, title: parsed.title
             ),
-            thumbnailPath: thumb?.path
+            thumbnailPath: thumb?.path,
+            chaptersRaw: parsed_info.chapters,
+            extras: parsed_info.extras
         )
+    }
+
+    /// Chapter markers and credits, from a single read of ComicInfo.xml.
+    ///
+    /// Collections mark issue boundaries with a Bookmark attribute on the
+    /// relevant <Page>. Files without them come back empty and are treated as
+    /// one run of pages.
+    private nonisolated static func comicInfoDetails(
+        in fileURL: URL
+    ) -> (chapters: String, extras: ComicInfoExtras) {
+        guard let xml = MetadataParser.readComicInfoXML(from: fileURL),
+              let data = xml.data(using: .utf8) else { return ("", .empty) }
+
+        let info = ComicInfo.parse(data)
+
+        let marks = info.chapters
+        let chapters = marks.count > 1
+            ? marks.map { "\($0.image)\t\($0.bookmark)" }.joined(separator: "\n")
+            : ""
+
+        var extras = ComicInfoExtras()
+        extras.creditsRaw = LibraryItem.creditRoles
+            .compactMap { role -> String? in
+                guard let key = ComicInfo.Key(rawValue: role) else { return nil }
+                let value = info[key]
+                return value.isEmpty ? nil : "\(role)\t\(value)"
+            }
+            .joined(separator: "\n")
+
+        extras.charactersRaw = LibraryItem.encodeList(
+            LibraryItem.splitNames(info[.characters])
+        )
+        extras.teamsRaw = LibraryItem.encodeList(
+            LibraryItem.splitNames(info[.teams])
+        )
+        extras.genresRaw = LibraryItem.encodeList(
+            LibraryItem.splitNames(info[.genre])
+        )
+        extras.storyArc = info[.storyArc].isEmpty ? nil : info[.storyArc]
+        extras.publisher = info[.publisher].isEmpty ? nil : info[.publisher]
+        extras.seriesGroup = info[.seriesGroup].isEmpty ? nil : info[.seriesGroup]
+
+        return (chapters, extras)
     }
 
     // MARK: - Scanning
@@ -142,6 +215,7 @@ final class LibraryIngest {
             return
         }
 
+        let batchID = UUID()
         isImporting = true
         processed = 0
         total = newFiles.count
@@ -177,11 +251,19 @@ final class LibraryIngest {
                     pageCount: scanned.pageCount
                 )
                 item.seriesName = scanned.seriesName
-                item.masterSeries = scanned.masterSeries
                 item.issueNumber = scanned.issueNumber
                 item.isSpecial = scanned.isSpecial
                 item.coverThumbnailPath = scanned.thumbnailPath
                 item.libraryID = libraryID
+                item.chaptersRaw = scanned.chaptersRaw
+                item.creditsRaw = scanned.extras.creditsRaw
+                item.charactersRaw = scanned.extras.charactersRaw
+                item.teamsRaw = scanned.extras.teamsRaw
+                item.genresRaw = scanned.extras.genresRaw
+                item.storyArcName = scanned.extras.storyArc
+                item.publisherName = scanned.extras.publisher
+                item.seriesGroupName = scanned.extras.seriesGroup
+                item.importBatchID = batchID
                 context.insert(item)
 
                 processed += 1
@@ -198,6 +280,7 @@ final class LibraryIngest {
         }
 
         try? context.save()
+        UserDefaults.standard.set(batchID.uuidString, forKey: Self.lastImportBatchKey)
     }
 
     // MARK: - Metadata refresh
@@ -237,12 +320,21 @@ final class LibraryIngest {
             item.title = parsed.title
             item.seriesName = parsed.seriesName
             item.issueNumber = parsed.issueNumber
-            item.masterSeries = chain.count >= 2
-                ? MetadataParser.cleanSeriesName(chain[chain.count - 2])
-                : nil
             item.isSpecial = MetadataParser.looksSpecial(
                 issueNumber: parsed.issueNumber, title: parsed.title
             )
+
+            // Credits and chapters too, so a refresh backfills everything the
+            // library was scanned before this existed.
+            let details = Self.comicInfoDetails(in: url)
+            item.chaptersRaw = details.chapters
+            item.creditsRaw = details.extras.creditsRaw
+            item.charactersRaw = details.extras.charactersRaw
+            item.teamsRaw = details.extras.teamsRaw
+            item.genresRaw = details.extras.genresRaw
+            item.storyArcName = details.extras.storyArc
+            item.publisherName = details.extras.publisher
+            item.seriesGroupName = details.extras.seriesGroup
         }
         try? context.save()
     }

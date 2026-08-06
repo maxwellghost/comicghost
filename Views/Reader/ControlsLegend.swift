@@ -21,6 +21,7 @@ struct ControlsLegend: View {
             ("arrow.left.arrow.right.square", "O", "Offset spread pairing"),
             ("scroll", "C", "Paged / continuous scroll"),
             ("bookmark", "B", "Bookmark this page"),
+            ("note.text.badge.plus", "N", "Add a note on this page"),
             ("slider.horizontal.3", "I", "Image adjustments"),
             ("magnifyingglass.circle", "L", "Floating magnifier"),
             ("eye.slash", "H", "Hide / show controls"),

@@ -20,6 +20,9 @@ struct PageView: View {
     var onHorizontalSwipe: (Int) -> Void = { _ in }
     var adjustments: ImageAdjustments = .neutral
     var magnifierEnabled: Bool = false
+    /// When true, the zoom level survives page turns and fit-mode changes
+    /// instead of snapping back to 100%.
+    var persistZoom: Bool = false
     @Binding var zoom: CGFloat
 
     private let minZoom: CGFloat = 1.0
@@ -111,6 +114,17 @@ struct PageView: View {
                 swipeFired = false
             }
             .onChange(of: fitMode) { _, _ in applyFit(in: geo.size) }
+            // Zoom can also be driven from outside this view — the keyboard
+            // shortcuts, the +/- buttons and the slider all write straight to
+            // the binding without passing through setZoom. The scroll monitor
+            // reads contentSize out of @State, so it has to be recomputed here
+            // or panning stays disabled at the pre-zoom size.
+            .onChange(of: zoom) { _, _ in
+                committedZoom = zoom
+                refreshMetrics(in: containerSize)
+                offset = clamp(offset)
+                committedOffset = offset
+            }
             .onChange(of: rightToLeft) { _, _ in applyFit(in: geo.size) }
             .onChange(of: adjustments.rotation) { _, _ in applyFit(in: geo.size) }
             .onChange(of: scrollPanningEnabled) { _, newValue in
@@ -302,10 +316,17 @@ struct PageView: View {
     // MARK: - Gestures
 
     /// Damped so a small pinch doesn't jump hundreds of percent.
+    ///
+    /// The trackpad reports raw magnification, which on a short pinch can
+    /// already be 2x or more. `pinchDamping` scales how much of that reaches
+    /// the zoom level: 1.0 is raw trackpad behaviour, lower is gentler.
+    /// Turn this down further if it still moves too fast.
+    private static let pinchDamping: CGFloat = 0.18
+
     private var magnifyGesture: some Gesture {
         MagnifyGesture()
             .onChanged { value in
-                let damped = 1 + (value.magnification - 1) * 0.45
+                let damped = 1 + (value.magnification - 1) * Self.pinchDamping
                 setZoom(committedZoom * damped)
             }
             .onEnded { _ in committedZoom = zoom }
@@ -348,8 +369,10 @@ struct PageView: View {
     // MARK: - Fit
 
     private func applyFit(in container: CGSize) {
-        zoom = 1.0
-        committedZoom = 1.0
+        // With persistence on, the zoom level is the user's to keep — only the
+        // pan offset is re-derived for the new page.
+        if !persistZoom { zoom = 1.0 }
+        committedZoom = zoom
         containerSize = container
         refreshMetrics(in: container)
 

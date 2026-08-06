@@ -6,7 +6,7 @@ import AppKit
 /// Brightness / contrast / gamma applied to comic pages.
 /// Brightness and contrast run as cheap SwiftUI modifiers; gamma needs a
 /// Core Image pass, so processed images are cached.
-struct ImageAdjustments: Equatable {
+nonisolated struct ImageAdjustments: Equatable {
     var brightness: Double = 0      // -0.5 ... 0.5
     var contrast: Double = 1        //  0.5 ... 1.8
     var gamma: Double = 1           //  0.4 ... 2.2
@@ -172,6 +172,11 @@ struct AdjustmentsPanel: View {
     @Binding var adjustments: ImageAdjustments
     var glassEnabled: Bool
     var accent: Color
+    /// Name shown on the per-series toggle.
+    var seriesName: String = ""
+    /// Whether this series has its own saved adjustments.
+    var usesSeriesSettings: Bool = false
+    var onSeriesScopeChange: (Bool) -> Void = { _ in }
     var onDismiss: () -> Void
 
     var body: some View {
@@ -246,6 +251,30 @@ struct AdjustmentsPanel: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+            }
+
+            if !seriesName.isEmpty {
+                Divider().overlay(CGTheme.surface1)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle(isOn: Binding(
+                        get: { usesSeriesSettings },
+                        set: { onSeriesScopeChange($0) }
+                    )) {
+                        Text("Save for \(seriesName)")
+                            .font(.callout)
+                            .foregroundStyle(CGTheme.text)
+                    }
+                    .toggleStyle(.checkbox)
+                    .tint(accent)
+
+                    Text(usesSeriesSettings
+                         ? "These settings apply to this series only. Other comics keep the global ones."
+                         : "Changes currently apply everywhere. Turn this on to keep them to this series.")
+                        .font(.caption2)
+                        .foregroundStyle(CGTheme.subtext0)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             HStack {

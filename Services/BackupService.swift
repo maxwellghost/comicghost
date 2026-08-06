@@ -25,6 +25,8 @@ enum BackupService {
         var title: String
         var seriesName: String?
         var issueNumber: String?
+        /// Retained so backups written before umbrella folders were removed
+        /// still decode. Nothing reads it now.
         var masterSeries: String?
         var isSpecial: Bool
         var isFavorite: Bool
@@ -93,7 +95,7 @@ enum BackupService {
                 title: item.title,
                 seriesName: item.seriesName,
                 issueNumber: item.issueNumber,
-                masterSeries: item.masterSeries,
+                masterSeries: nil,
                 isSpecial: item.isSpecial,
                 isFavorite: item.isFavorite,
                 isMetadataLocked: item.isMetadataLocked,
@@ -184,7 +186,6 @@ enum BackupService {
             item.title = record.title
             item.seriesName = record.seriesName
             item.issueNumber = record.issueNumber
-            item.masterSeries = record.masterSeries
             item.isSpecial = record.isSpecial
             item.isFavorite = record.isFavorite
             item.isMetadataLocked = record.isMetadataLocked

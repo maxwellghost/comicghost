@@ -5,10 +5,14 @@ import SwiftData
 struct SeriesCard: View {
     let series: Series
     var allItems: [LibraryItem] = []
-    /// >1 means this tile is an umbrella folder containing several series.
-    var subSeriesCount: Int = 1
     var onRename: () -> Void = {}
     var onMerge: () -> Void = {}
+    /// Opens the next issue you haven't finished.
+    var onContinue: (LibraryItem) -> Void = { _ in }
+    /// Assigns this whole series to a franchise.
+    var onSetGroup: () -> Void = {}
+    /// Sets the publisher for every issue in this series.
+    var onSetPublisher: () -> Void = {}
 
     @Environment(\.modelContext) private var context
     @AppStorage(CGAccent.key) private var accentRaw: String = CGAccent.mauve.rawValue
@@ -31,14 +35,6 @@ struct SeriesCard: View {
                             .padding(6)
                     }
                 }
-                if subSeriesCount > 1 {
-                    Image(systemName: "square.stack")
-                        .font(.caption)
-                        .foregroundStyle(CGTheme.crust)
-                        .padding(5)
-                        .background(CGTheme.lavender, in: Circle())
-                        .padding(6)
-                }
             }
 
             Text(series.name)
@@ -46,9 +42,7 @@ struct SeriesCard: View {
                 .foregroundStyle(CGTheme.text)
                 .lineLimit(2)
 
-            Text(subSeriesCount > 1
-                 ? "\(subSeriesCount) series · \(series.items.count) issues"
-                 : series.subtitle)
+            Text(series.subtitle)
                 .font(.caption)
                 .foregroundStyle(CGTheme.subtext0)
 
@@ -68,6 +62,29 @@ struct SeriesCard: View {
         .softGlow(accent, radius: 7, isActive: isHovering)
         .animation(.easeOut(duration: 0.18), value: isHovering)
         .contextMenu {
+            if let next = series.nextUnread {
+                Button {
+                    onContinue(next)
+                } label: {
+                    Label("Continue: \(next.title)", systemImage: "play.fill")
+                }
+                Divider()
+            }
+
+            Button {
+                onSetGroup()
+            } label: {
+                Label("Set Series Group…", systemImage: "square.stack")
+            }
+
+            Button {
+                onSetPublisher()
+            } label: {
+                Label("Set Publisher…", systemImage: "building.2")
+            }
+
+            Divider()
+
             Button {
                 for item in series.items {
                     StatusActions.markRead(item, context: context)
@@ -218,6 +235,17 @@ struct Series: Identifiable {
 
     var readCount: Int {
         items.filter { $0.status == .completed }.count
+    }
+
+    /// The issue to pick up next: whatever's part-read, otherwise the earliest
+    /// unstarted one. Main run before specials, natural order within each.
+    var nextUnread: LibraryItem? {
+        let ordered = items.sorted {
+            if $0.isSpecial != $1.isSpecial { return !$0.isSpecial }
+            return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        }
+        if let inProgress = ordered.first(where: { $0.status == .inProgress }) { return inProgress }
+        return ordered.first { $0.status == .new || $0.status == .unread }
     }
 
     var newCount: Int {

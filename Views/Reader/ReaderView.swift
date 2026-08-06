@@ -11,6 +11,8 @@ struct ReaderView: View {
     var onOpenPrevious: (LibraryItem) -> Void = { _ in }
     /// Set when arriving by paging backwards, so we land on the last page.
     var startAtEnd: Bool = false
+    /// Opens directly at a page, used when arriving from a bookmark or note.
+    var startAtPage: Int?
 
     @Environment(\.modelContext) private var context
     @AppStorage(CGGlass.key) private var glassEnabled: Bool = true
@@ -27,8 +29,14 @@ struct ReaderView: View {
     @AppStorage("mangaSeries") private var mangaSeriesRaw: String = ""
     /// Series set to continuous scrolling, newline-separated.
     @AppStorage("continuousSeries") private var continuousSeriesRaw: String = ""
+    /// Per-series image adjustment overrides, one line per series:
+    /// "seriesKey<tab>brightness,contrast,gamma,grayscale,autoContrast,autoCrop,rotation"
+    @AppStorage("seriesAdjustments") private var seriesAdjustmentsRaw: String = ""
     @AppStorage("alwaysShowEdges") private var alwaysShowEdges: Bool = false
     @AppStorage("hideReaderControls") private var hideControls: Bool = false
+    @AppStorage("readerPersistZoom") private var persistZoom: Bool = true
+    @AppStorage("showEndOfIssueCard") private var showEndCard: Bool = true
+    @AppStorage("readerZoomLevel") private var storedZoom: Double = 1.0
     @AppStorage(ImageAdjustments.brightnessKey) private var adjBrightness: Double = 0
     @AppStorage(ImageAdjustments.contrastKey) private var adjContrast: Double = 1
     @AppStorage(ImageAdjustments.gammaKey) private var adjGamma: Double = 1
@@ -60,6 +68,13 @@ struct ReaderView: View {
     @State private var magnifierOn = false
     @State private var bookmarks: [Bookmark] = []
     @State private var continuousPage = 0
+    @State private var notes: [ComicNote] = []
+    @State private var activeNote: ComicNote?
+    @State private var endCardVisible = false
+    /// The unit whose end card has already been dismissed, so continuing
+    /// forward doesn't immediately show it again.
+    @State private var endCardAcknowledgedUnit: Int?
+    @State private var coverStatus: String?
 
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
     private var fitMode: FitMode { FitMode(rawValue: fitModeRaw) ?? .page }
@@ -67,7 +82,10 @@ struct ReaderView: View {
     private var adjustments: Binding<ImageAdjustments> {
         Binding(
             get: {
-                ImageAdjustments(
+                // A series override wins when one exists; otherwise the global
+                // settings apply, exactly as before.
+                if let stored = seriesAdjustments[item.seriesKey] { return stored }
+                return ImageAdjustments(
                     brightness: adjBrightness,
                     contrast: adjContrast,
                     gamma: adjGamma,
@@ -78,6 +96,10 @@ struct ReaderView: View {
                 )
             },
             set: { newValue in
+                if hasSeriesAdjustments {
+                    setSeriesAdjustments(newValue)
+                    return
+                }
                 adjBrightness = newValue.brightness
                 adjContrast = newValue.contrast
                 adjGamma = newValue.gamma
@@ -87,6 +109,72 @@ struct ReaderView: View {
                 adjRotation = newValue.rotation
             }
         )
+    }
+
+    // MARK: - Image adjustments (per series)
+
+    /// A 1970s scan and a modern digital release rarely want the same gamma.
+    private var seriesAdjustments: [String: ImageAdjustments] {
+        var result: [String: ImageAdjustments] = [:]
+        for line in seriesAdjustmentsRaw.split(separator: "\n") {
+            let parts = line.split(separator: "\t", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+            let values = parts[1].split(separator: ",").map(String.init)
+            guard values.count == 7 else { continue }
+            result[String(parts[0])] = ImageAdjustments(
+                brightness: Double(values[0]) ?? 0,
+                contrast: Double(values[1]) ?? 1,
+                gamma: Double(values[2]) ?? 1,
+                grayscale: values[3] == "1",
+                autoContrast: values[4] == "1",
+                autoCrop: values[5] == "1",
+                rotation: Int(values[6]) ?? 0
+            )
+        }
+        return result
+    }
+
+    private var hasSeriesAdjustments: Bool {
+        seriesAdjustments[item.seriesKey] != nil
+    }
+
+    private func setSeriesAdjustments(_ value: ImageAdjustments) {
+        var all = seriesAdjustments
+        all[item.seriesKey] = value
+        writeSeriesAdjustments(all)
+    }
+
+    private func clearSeriesAdjustments() {
+        var all = seriesAdjustments
+        all.removeValue(forKey: item.seriesKey)
+        writeSeriesAdjustments(all)
+    }
+
+    private func writeSeriesAdjustments(_ all: [String: ImageAdjustments]) {
+        seriesAdjustmentsRaw = all
+            .map { key, value in
+                let encoded = [
+                    String(value.brightness),
+                    String(value.contrast),
+                    String(value.gamma),
+                    value.grayscale ? "1" : "0",
+                    value.autoContrast ? "1" : "0",
+                    value.autoCrop ? "1" : "0",
+                    String(value.rotation)
+                ].joined(separator: ",")
+                return "\(key)\t\(encoded)"
+            }
+            .sorted()
+            .joined(separator: "\n")
+    }
+
+    /// Turning this on snapshots whatever is on screen into the series slot.
+    private func setUsesSeriesAdjustments(_ enabled: Bool) {
+        if enabled {
+            setSeriesAdjustments(adjustments.wrappedValue)
+        } else {
+            clearSeriesAdjustments()
+        }
     }
 
     // MARK: - Continuous mode (per series)
@@ -143,10 +231,18 @@ struct ReaderView: View {
         return !autoHideChrome || chromeVisible || overlayOpen
     }
 
+    /// The page counter is the one piece of chrome that survives Hide Controls.
+    /// Full strength while the rest of the chrome is up, dimmed but legible
+    /// once it goes away.
+    private var counterOpacity: Double {
+        chromeShown ? 1 : 0.35
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             if archive != nil, !units.isEmpty {
                 pager
+                    .contextMenu { readerMenu }
             } else if let loadError {
                 ContentUnavailableView("Couldn't open comic",
                                        systemImage: "exclamationmark.triangle",
@@ -172,7 +268,10 @@ struct ReaderView: View {
                         AdjustmentsPanel(
                             adjustments: adjustments,
                             glassEnabled: glassEnabled,
-                            accent: accent
+                            accent: accent,
+                            seriesName: item.seriesKey,
+                            usesSeriesSettings: hasSeriesAdjustments,
+                            onSeriesScopeChange: { setUsesSeriesAdjustments($0) }
                         ) { showAdjustments = false }
                         .padding(.top, 84)
                         .padding(.trailing, 20)
@@ -186,7 +285,8 @@ struct ReaderView: View {
         .overlay(alignment: .bottom) {
             if showStrip, !units.isEmpty {
                 PageStrip(units: units, currentUnit: currentUnit,
-                          accent: accent, rightToLeft: isManga) { index in
+                          accent: accent, rightToLeft: isManga,
+                          chapterStarts: chapterStartPages) { index in
                     jump(to: index)
                 }
                 .glassPanel(enabled: glassEnabled, fallback: CGTheme.mantle)
@@ -194,6 +294,35 @@ struct ReaderView: View {
             }
         }
         .overlay(alignment: .bottom) { edgeProgressBar }
+        .overlay {
+            if endCardVisible {
+                ZStack {
+                    Rectangle()
+                        .fill(.black.opacity(0.45))
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            endCardAcknowledgedUnit = currentUnit
+                            withAnimation(.easeOut(duration: 0.2)) { endCardVisible = false }
+                        }
+                    endOfIssueCard
+                }
+                .transition(.opacity)
+            }
+        }
+        .overlay(alignment: .top) {
+            if let coverStatus {
+                Text(coverStatus)
+                    .font(.callout)
+                    .foregroundStyle(CGTheme.text)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .glassPanel(enabled: glassEnabled, fallback: CGTheme.mantle)
+                    .clipShape(Capsule())
+                    .padding(.top, 60)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: coverStatus)
         .background {
             if glassEnabled {
                 GlassBackdrop(imagePath: currentPagePath, tint: CGTheme.crust, blur: 70, artOpacity: 0.5)
@@ -212,18 +341,34 @@ struct ReaderView: View {
         .animation(.easeInOut(duration: 0.25), value: hideControls)
         .animation(.easeOut(duration: 0.25), value: isContinuous)
         .animation(.easeInOut(duration: 0.3), value: chromeShown)
+        .onChange(of: zoom) { _, newValue in
+            // Pinch, Cmd-scroll and double-click all write through the binding,
+            // so persistence is captured here rather than in setZoom.
+            if persistZoom { storedZoom = Double(newValue) }
+        }
+        .onChange(of: persistZoom) { _, enabled in
+            if enabled { storedZoom = Double(zoom) } else { setZoom(1.0) }
+        }
         .task {
+            if persistZoom {
+                zoom = min(max(CGFloat(storedZoom), minZoom), maxZoom)
+            }
             await load()
             if !hasSeenControls {
                 showLegend = true
                 hasSeenControls = true
             }
+            loadNotes()
             wakeChrome()
             startSleepPrevention()
         }
         .onDisappear {
             hideTask?.cancel()
             stopSleepPrevention()
+        }
+        .sheet(item: $activeNote) { note in
+            NoteEditorSheet(note: note)
+                .onDisappear { loadNotes() }
         }
         .onChange(of: spreadEnabled) { _, _ in rebuildUnits(preservingPage: true) }
         .onChange(of: spreadOffset) { _, _ in rebuildUnits(preservingPage: true) }
@@ -232,8 +377,15 @@ struct ReaderView: View {
 
     private var shortcuts: some View {
         Group {
-            Button("") { dismissOrClose() }
-                .keyboardShortcut(.escape, modifiers: [])
+            Button("") {
+                if endCardVisible {
+                    endCardAcknowledgedUnit = currentUnit
+                    withAnimation(.easeOut(duration: 0.2)) { endCardVisible = false }
+                } else {
+                    dismissOrClose()
+                }
+            }
+            .keyboardShortcut(.escape, modifiers: [])
             Button("") { showLegend.toggle() }
                 .keyboardShortcut("?", modifiers: [])
             Button("") { showLegend.toggle() }
@@ -248,6 +400,8 @@ struct ReaderView: View {
                 .keyboardShortcut("c", modifiers: [])
             Button("") { toggleBookmark() }
                 .keyboardShortcut("b", modifiers: [])
+            Button("") { addNote() }
+                .keyboardShortcut("n", modifiers: [])
             Button("") { showAdjustments.toggle() }
                 .keyboardShortcut("i", modifiers: [])
             Button("") { magnifierOn.toggle() }
@@ -262,9 +416,9 @@ struct ReaderView: View {
                 .keyboardShortcut("t", modifiers: [])
             Button("") { toggleFullScreen() }
                 .keyboardShortcut("f", modifiers: [.command, .control])
-            Button("") { adjustZoom(by: 0.5) }
+            Button("") { adjustZoom(by: zoomStep) }
                 .keyboardShortcut("=", modifiers: .command)
-            Button("") { adjustZoom(by: -0.5) }
+            Button("") { adjustZoom(by: -zoomStep) }
                 .keyboardShortcut("-", modifiers: .command)
             Button("") { setZoom(1.0) }
                 .keyboardShortcut("0", modifiers: .command)
@@ -465,6 +619,8 @@ struct ReaderView: View {
             }
             .buttonStyle(.plain)
 
+            notesSection
+
             Button {
                 withAnimation(.easeInOut(duration: 0.25)) { hideControls.toggle() }
             } label: {
@@ -598,14 +754,51 @@ struct ReaderView: View {
         }
     }
 
+    /// Keyboard and button zoom moves in 25-point steps.
+    private let zoomStep: CGFloat = 0.25
+    private let minZoom: CGFloat = 1.0
+    private let maxZoom: CGFloat = 6.0
+
     private var zoomControls: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Zoom \(Int(zoom * 100))%").font(.caption).foregroundStyle(CGTheme.subtext0)
+            Text("Zoom \(Int(zoom * 100))%")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(CGTheme.subtext0)
+
             HStack(spacing: 8) {
-                zoomButton("minus.magnifyingglass") { adjustZoom(by: -0.5) }
-                zoomButton("plus.magnifyingglass") { adjustZoom(by: 0.5) }
+                zoomButton("minus.magnifyingglass") { adjustZoom(by: -zoomStep) }
+                zoomButton("plus.magnifyingglass") { adjustZoom(by: zoomStep) }
                 zoomButton("arrow.counterclockwise") { setZoom(1.0) }
             }
+
+            // Drag straight to a zoom level instead of stepping there.
+            Slider(
+                value: Binding(
+                    get: { Double(zoom) },
+                    set: { setZoom(CGFloat($0)) }
+                ),
+                in: Double(minZoom)...Double(maxZoom),
+                step: Double(zoomStep)
+            )
+            .controlSize(.small)
+            .tint(accent)
+
+            HStack {
+                Text("\(Int(minZoom * 100))%")
+                Spacer()
+                Text("\(Int(maxZoom * 100))%")
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(CGTheme.subtext0.opacity(0.7))
+
+            Toggle(isOn: $persistZoom) {
+                Text("Keep zoom between pages")
+                    .font(.caption)
+                    .foregroundStyle(CGTheme.subtext1)
+            }
+            .toggleStyle(.checkbox)
+            .tint(accent)
+            .padding(.top, 2)
         }
     }
 
@@ -627,7 +820,7 @@ struct ReaderView: View {
 
     private func setZoom(_ value: CGFloat) {
         withAnimation(.easeOut(duration: 0.2)) {
-            zoom = min(max(value, 1.0), 6.0)
+            zoom = min(max(value, minZoom), maxZoom)
         }
     }
 
@@ -655,6 +848,7 @@ struct ReaderView: View {
                          },
                          adjustments: adjustments.wrappedValue,
                          magnifierEnabled: magnifierOn,
+                         persistZoom: persistZoom,
                          zoom: $zoom)
                 .id(currentUnit)
                 .transition(.opacity)
@@ -681,7 +875,13 @@ struct ReaderView: View {
 
             VStack {
                 Spacer()
-                pageCounter.opacity(chromeShown ? 1 : 0)
+                VStack(spacing: 8) {
+                    zoomScale.opacity(chromeShown ? 1 : 0)
+                    // The counter outlives the rest of the chrome: hiding
+                    // controls shouldn't cost you your place in a 900-page
+                    // omnibus. It just fades back rather than disappearing.
+                    pageCounter.opacity(counterOpacity)
+                }
             }
 
             if isOnLastUnit, let nextItem {
@@ -761,10 +961,62 @@ struct ReaderView: View {
         return ""
     }
 
+    /// Always-visible zoom control, so it isn't buried in the nav pane.
+    private var zoomScale: some View {
+        HStack(spacing: 10) {
+            Button { adjustZoom(by: -zoomStep) } label: {
+                Image(systemName: "minus")
+            }
+            .buttonStyle(.plain)
+            .disabled(zoom <= minZoom)
+
+            Slider(
+                value: Binding(
+                    get: { Double(zoom) },
+                    set: { setZoom(CGFloat($0)) }
+                ),
+                in: Double(minZoom)...Double(maxZoom),
+                step: Double(zoomStep)
+            )
+            .controlSize(.small)
+            .tint(accent)
+            .frame(width: 160)
+
+            Button { adjustZoom(by: zoomStep) } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.plain)
+            .disabled(zoom >= maxZoom)
+
+            Text("\(Int(zoom * 100))%")
+                .font(.caption.monospacedDigit())
+                .frame(width: 42, alignment: .trailing)
+
+            Button { setZoom(1.0) } label: {
+                Image(systemName: "arrow.counterclockwise")
+            }
+            .buttonStyle(.plain)
+            .disabled(!isZoomed)
+        }
+        .foregroundStyle(CGTheme.subtext1)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background {
+            if glassEnabled {
+                Capsule().fill(.ultraThinMaterial)
+            } else {
+                Capsule().fill(CGTheme.base.opacity(0.85))
+            }
+        }
+    }
+
     private var pageCounter: some View {
         Button { showJump = true } label: {
             HStack(spacing: 8) {
                 Text(counterText).font(.callout.monospacedDigit())
+                if let chapterProgressLabel {
+                    Text("· \(chapterProgressLabel)").font(.caption)
+                }
                 if isZoomed {
                     Text("· \(Int(zoom * 100))%").font(.caption.monospacedDigit())
                 }
@@ -813,7 +1065,7 @@ struct ReaderView: View {
     private func jump(to index: Int) {
         guard units.indices.contains(index) else { return }
         currentUnit = index
-        zoom = 1.0
+        if !persistZoom { zoom = 1.0 }
         saveProgress()
         preloadAround()
     }
@@ -832,6 +1084,14 @@ struct ReaderView: View {
 
     private func turnUnit(_ direction: Int) {
         wakeChrome()
+
+        // Landing beat between issues. Without this, finishing an issue drops
+        // you straight onto page 1 of the next one with no acknowledgement.
+        if direction > 0, showEndCard, endCardAcknowledgedUnit != currentUnit, isAtSectionEnd {
+            withAnimation(.easeOut(duration: 0.25)) { endCardVisible = true }
+            return
+        }
+
         let next = currentUnit + direction
         if next >= units.count, direction > 0, let nextItem {
             onOpenNext(nextItem)
@@ -845,7 +1105,7 @@ struct ReaderView: View {
         withAnimation(.easeInOut(duration: 0.16)) {
             currentUnit = next
         }
-        zoom = 1.0
+        if !persistZoom { zoom = 1.0 }
         saveProgress()
         preloadAround()
     }
@@ -948,8 +1208,20 @@ struct ReaderView: View {
         units = buildUnits(from: result.pages)
 
         item.isNew = false
-        let savedPage = min(item.progress?.currentPage ?? 0, max(result.pages.count - 1, 0))
-        currentUnit = unitIndex(containing: savedPage)
+
+        // Explicit page wins, then "open at the end" when paging backwards into
+        // the previous issue, then the saved resume point.
+        let lastPage = max(result.pages.count - 1, 0)
+        let target: Int
+        if let startAtPage {
+            target = min(max(startAtPage, 0), lastPage)
+        } else if startAtEnd {
+            target = lastPage
+        } else {
+            target = min(item.progress?.currentPage ?? 0, lastPage)
+        }
+        currentUnit = unitIndex(containing: target)
+        continuousPage = target
         nextItem = findNextIssue()
         preloadAround()
     }
@@ -999,6 +1271,284 @@ struct ReaderView: View {
         bookmarks = all
             .filter { $0.itemID == id }
             .sorted { $0.page < $1.page }
+    }
+
+    // MARK: - End of issue
+
+    /// True at the last page of a chapter, or at the end of the file.
+    private var isAtSectionEnd: Bool {
+        if item.hasChapters, item.isChapterEnd(page: lastPageOfCurrentUnit) { return true }
+        return isOnLastUnit
+    }
+
+    private var lastPageOfCurrentUnit: Int {
+        guard units.indices.contains(currentUnit) else { return 0 }
+        return units[currentUnit].last?.index ?? 0
+    }
+
+    /// What was just finished — a chapter inside a collection, or the whole file.
+    private var finishedTitle: String {
+        if item.hasChapters, let chapter = item.chapter(forPage: lastPageOfCurrentUnit) {
+            return chapter.title
+        }
+        return item.title
+    }
+
+    /// What comes after it.
+    private var upNextTitle: String? {
+        if item.hasChapters {
+            let marks = item.chapters
+            if let index = item.chapterIndex(forPage: lastPageOfCurrentUnit),
+               index + 1 < marks.count {
+                return marks[index + 1].title
+            }
+        }
+        return nextItem?.title
+    }
+
+    /// 0-based page indices where a new chapter begins.
+    private var chapterStartPages: Set<Int> {
+        guard item.hasChapters else { return [] }
+        return Set(item.chapters.map(\.startPage))
+    }
+
+    private var chapterProgressLabel: String? {
+        guard item.hasChapters,
+              let index = item.chapterIndex(forPage: currentPageIndex) else { return nil }
+        return "Issue \(index + 1) of \(item.chapters.count)"
+    }
+
+    private func continueFromEndCard() {
+        endCardAcknowledgedUnit = currentUnit
+        withAnimation(.easeOut(duration: 0.2)) { endCardVisible = false }
+        turnUnit(1)
+    }
+
+    private var endOfIssueCard: some View {
+        VStack(spacing: 18) {
+            VStack(spacing: 6) {
+                Text("Finished")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(CGTheme.subtext0)
+                    .textCase(.uppercase)
+                Text(finishedTitle)
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(CGTheme.text)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                if let chapterProgressLabel {
+                    Text(chapterProgressLabel)
+                        .font(.caption)
+                        .foregroundStyle(CGTheme.subtext0)
+                }
+            }
+
+            if let upNextTitle {
+                VStack(spacing: 4) {
+                    Text("Up next")
+                        .font(.caption)
+                        .foregroundStyle(CGTheme.subtext0)
+                    Text(upNextTitle)
+                        .font(.callout)
+                        .foregroundStyle(CGTheme.subtext1)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                }
+            }
+
+            HStack(spacing: 12) {
+                Button { onClose() } label: {
+                    Label("Back to Library", systemImage: "chevron.left")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(CGTheme.subtext1)
+
+                if upNextTitle != nil {
+                    Button { continueFromEndCard() } label: {
+                        Label("Continue", systemImage: "arrow.right")
+                            .font(.callout.weight(.medium))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(accent)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+
+            Button("Keep reading this page") {
+                endCardAcknowledgedUnit = currentUnit
+                withAnimation(.easeOut(duration: 0.2)) { endCardVisible = false }
+            }
+            .buttonStyle(.plain)
+            .font(.caption)
+            .foregroundStyle(CGTheme.subtext0)
+        }
+        .padding(32)
+        .frame(maxWidth: 420)
+        .glassPanel(enabled: glassEnabled, fallback: CGTheme.mantle)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.35), radius: 24)
+    }
+
+    // MARK: - Cover
+
+    /// Scene releases often lead with a scanner credits page, so the first page
+    /// isn't always the cover you want in the grid.
+    private func setCoverFromCurrentPage() {
+        let page = currentPageIndex
+        let id = item.id
+        let path = item.filePath
+
+        coverStatus = "Updating cover…"
+        Task {
+            let result = await Task.detached(priority: .userInitiated) { () -> String? in
+                try? ThumbnailGenerator.regenerate(
+                    for: id, archivePath: path, pageIndex: page
+                ).path
+            }.value
+
+            if let result {
+                item.coverPageIndex = page
+                item.coverThumbnailPath = result
+                try? context.save()
+                coverStatus = "Cover set to page \(page + 1)"
+            } else {
+                coverStatus = "Couldn't update the cover"
+            }
+
+            try? await Task.sleep(for: .seconds(2))
+            coverStatus = nil
+        }
+    }
+
+    // MARK: - Notes
+
+    private func loadNotes() {
+        let id = item.id
+        let all = (try? context.fetch(FetchDescriptor<ComicNote>())) ?? []
+        notes = all
+            .filter { $0.itemID == id }
+            .sorted { ($0.page ?? Int.max, $0.dateCreated) < ($1.page ?? Int.max, $1.dateCreated) }
+    }
+
+    /// Notes anchored to the page currently on screen.
+    private var notesOnThisPage: [ComicNote] {
+        let page = currentPageIndex + 1
+        return notes.filter { $0.page == page }
+    }
+
+    /// Captures the page you're looking at, which is the whole point — an
+    /// editor's note on page 13 is only findable later if the note remembers 13.
+    private func addNote() {
+        let note = ComicNote(
+            itemID: item.id,
+            itemTitle: item.title,
+            page: currentPageIndex + 1
+        )
+        context.insert(note)
+        try? context.save()
+        loadNotes()
+        activeNote = note
+    }
+
+    /// Right-click menu over the page.
+    @ViewBuilder
+    private var readerMenu: some View {
+        Button { addNote() } label: {
+            Label("Add Note on Page \(currentPageIndex + 1)…", systemImage: "note.text.badge.plus")
+        }
+
+        if !notesOnThisPage.isEmpty {
+            Menu("Notes on This Page") {
+                ForEach(notesOnThisPage) { note in
+                    Button(note.displayTitle) { activeNote = note }
+                }
+            }
+        }
+
+        if !notes.isEmpty {
+            Menu("All Notes in This Issue") {
+                ForEach(notes) { note in
+                    Button(noteMenuLabel(note)) {
+                        if let page = note.page { jumpToPageNumber(page) }
+                        activeNote = note
+                    }
+                }
+            }
+        }
+
+        Divider()
+
+        Button { toggleBookmark() } label: {
+            Label(isBookmarked ? "Remove Bookmark" : "Add Bookmark",
+                  systemImage: isBookmarked ? "bookmark.slash" : "bookmark")
+        }
+
+        Button { showJump = true } label: {
+            Label("Jump to Page…", systemImage: "arrow.right.to.line")
+        }
+
+        Divider()
+
+        Button { setCoverFromCurrentPage() } label: {
+            Label("Set as Cover", systemImage: "photo.badge.checkmark")
+        }
+    }
+
+    private func noteMenuLabel(_ note: ComicNote) -> String {
+        if let pageLabel = note.pageLabel {
+            return "\(pageLabel) — \(note.displayTitle)"
+        }
+        return note.displayTitle
+    }
+
+    /// Sidebar block listing this issue's notes.
+    @ViewBuilder
+    private var notesSection: some View {
+        Button { addNote() } label: {
+            Label("Add Note (N)", systemImage: "note.text.badge.plus")
+                .font(.callout)
+                .foregroundStyle(CGTheme.subtext1)
+        }
+        .buttonStyle(.plain)
+
+        if !notes.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Notes")
+                    .font(.caption)
+                    .foregroundStyle(CGTheme.subtext0)
+
+                ForEach(notes) { note in
+                    Button {
+                        if let page = note.page { jumpToPageNumber(page) }
+                        activeNote = note
+                    } label: {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(note.displayTitle)
+                                .font(.caption)
+                                .foregroundStyle(CGTheme.subtext1)
+                                .lineLimit(1)
+                            if let pageLabel = note.pageLabel {
+                                Text(pageLabel)
+                                    .font(.caption2)
+                                    .foregroundStyle(CGTheme.subtext0.opacity(0.8))
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    /// Notes store 1-based pages; everything internal is 0-based.
+    private func jumpToPageNumber(_ page: Int) {
+        let index = max(0, page - 1)
+        if isContinuous {
+            continuousPage = index
+        } else {
+            jump(to: unitIndex(containing: index))
+        }
     }
 
     private func toggleBookmark() {

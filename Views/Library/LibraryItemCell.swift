@@ -17,6 +17,8 @@ struct LibraryItemCell: View {
     @State private var cover: NSImage?
     @State private var didAttemptLoad = false
     @State private var showLabelManager = false
+    @State private var showMetadataEditor = false
+    @State private var activeNote: ComicNote?
 
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
 
@@ -65,9 +67,13 @@ struct LibraryItemCell: View {
         .contextMenu { ItemContextMenu(item: item, allItems: allItems,
                                        showEditSheet: $showEditSheet,
                                        showRemoveConfirm: $showRemoveConfirm,
-                                       showLabelManager: $showLabelManager) }
+                                       showLabelManager: $showLabelManager,
+                                       showMetadataEditor: $showMetadataEditor,
+                                       activeNote: $activeNote) }
         .sheet(isPresented: $showEditSheet) { EditInfoSheet(item: item) }
         .sheet(isPresented: $showLabelManager) { LabelManager() }
+        .sheet(isPresented: $showMetadataEditor) { MetadataEditorSheet(item: item) }
+        .sheet(item: $activeNote) { NoteEditorSheet(note: $0) }
         .confirmationDialog(
             "Remove “\(item.title)”?",
             isPresented: $showRemoveConfirm,
@@ -197,6 +203,8 @@ struct LibraryItemRow: View {
     @State private var showEditSheet = false
     @State private var showRemoveConfirm = false
     @State private var showLabelManager = false
+    @State private var showMetadataEditor = false
+    @State private var activeNote: ComicNote?
 
     private var rowLabels: [ComicLabel] {
         let ids = Set(item.labelIDs)
@@ -276,9 +284,13 @@ struct LibraryItemRow: View {
         .contextMenu { ItemContextMenu(item: item, allItems: allItems,
                                        showEditSheet: $showEditSheet,
                                        showRemoveConfirm: $showRemoveConfirm,
-                                       showLabelManager: $showLabelManager) }
+                                       showLabelManager: $showLabelManager,
+                                       showMetadataEditor: $showMetadataEditor,
+                                       activeNote: $activeNote) }
         .sheet(isPresented: $showEditSheet) { EditInfoSheet(item: item) }
         .sheet(isPresented: $showLabelManager) { LabelManager() }
+        .sheet(isPresented: $showMetadataEditor) { MetadataEditorSheet(item: item) }
+        .sheet(item: $activeNote) { NoteEditorSheet(note: $0) }
         .confirmationDialog(
             "Remove “\(item.title)”?",
             isPresented: $showRemoveConfirm,
@@ -318,8 +330,32 @@ struct ItemContextMenu: View {
     @Binding var showEditSheet: Bool
     @Binding var showRemoveConfirm: Bool
     @Binding var showLabelManager: Bool
+    @Binding var showMetadataEditor: Bool
+    @Binding var activeNote: ComicNote?
     @Environment(\.modelContext) private var context
     @Query(sort: \ComicLabel.sortIndex) private var labels: [ComicLabel]
+    @Query private var notes: [ComicNote]
+
+    /// An issue can carry several notes now — one per editor's note, typically.
+    private var itemNotes: [ComicNote] {
+        notes
+            .filter { $0.itemID == item.id }
+            .sorted { ($0.page ?? Int.max, $0.dateCreated) < ($1.page ?? Int.max, $1.dateCreated) }
+    }
+
+    private func addNote() {
+        let note = ComicNote(itemID: item.id, itemTitle: item.title)
+        context.insert(note)
+        try? context.save()
+        activeNote = note
+    }
+
+    private func noteLabel(_ note: ComicNote) -> String {
+        if let pageLabel = note.pageLabel {
+            return "\(pageLabel) — \(note.displayTitle)"
+        }
+        return note.displayTitle
+    }
 
     var body: some View {
         Button {
@@ -405,7 +441,35 @@ struct ItemContextMenu: View {
         Button {
             showEditSheet = true
         } label: {
-            Label("Edit Info…", systemImage: "pencil")
+            Label("Edit Library Info…", systemImage: "pencil")
+        }
+
+        Button {
+            showMetadataEditor = true
+        } label: {
+            Label("Edit File Metadata…", systemImage: "doc.badge.gearshape")
+        }
+
+        if itemNotes.isEmpty {
+            Button { addNote() } label: {
+                Label("Add Note…", systemImage: "note.text")
+            }
+        } else {
+            Menu {
+                Button { addNote() } label: {
+                    Label("Add Note…", systemImage: "note.text.badge.plus")
+                }
+                Divider()
+                ForEach(itemNotes) { note in
+                    Button(noteLabel(note)) {
+                        note.itemTitle = item.title
+                        try? context.save()
+                        activeNote = note
+                    }
+                }
+            } label: {
+                Label("Notes (\(itemNotes.count))", systemImage: "note.text")
+            }
         }
 
         Divider()
@@ -479,7 +543,7 @@ struct EditInfoSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Edit Info")
+            Text("Edit Library Info")
                 .font(.headline)
                 .foregroundStyle(CGTheme.text)
 

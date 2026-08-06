@@ -12,8 +12,7 @@ enum ModelContainerSetup {
             Bookmark.self,
             ComicLabel.self,
             IgnoredFile.self,
-            ComicLabel.self,
-            IgnoredFile.self,
+            ComicNote.self,
         ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         do {

@@ -28,5 +28,9 @@ struct ComicGhostApp: App {
                 .preferredColorScheme(theme.isDark ? .dark : .light)
                 .tint(CGTheme.accent)
         }
+        // Without this the Settings scene gets its own empty store: libraries
+        // look missing, adding one writes somewhere nothing else reads, and
+        // backup export/restore operates on nothing.
+        .modelContainer(ModelContainerSetup.shared)
     }
 }

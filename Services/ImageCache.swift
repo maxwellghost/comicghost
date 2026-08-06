@@ -4,7 +4,7 @@ import ImageIO
 
 /// Decoded-image cache so page turns don't re-read from disk, plus
 /// background preloading of upcoming pages.
-final class ImageCache: @unchecked Sendable {
+nonisolated final class ImageCache: @unchecked Sendable {
     static let shared = ImageCache()
 
     private let cache = NSCache<NSURL, NSImage>()

@@ -5,14 +5,14 @@ import ImageIO
 import UniformTypeIdentifiers
 import AppKit
 
-protocol ArchiveExtractor {
+nonisolated protocol ArchiveExtractor {
     func extractPages(from archiveURL: URL) throws -> [ComicPage]
     func pageCount(of archiveURL: URL) throws -> Int
     /// Just the first image, in memory — no full unpack. Used for thumbnails.
     func coverImageData(from archiveURL: URL) throws -> Data
 }
 
-enum ArchiveError: Error, LocalizedError {
+nonisolated enum ArchiveError: Error, LocalizedError {
     case unsupportedFormat(String)
     case extractionFailed(String)
     case unrarNotFound
@@ -61,6 +61,28 @@ nonisolated enum ArchiveSupport {
         return dir
     }
 
+    /// How many loose images a folder needs before it counts as a comic.
+    /// Low enough for short one-shots, high enough that a stray cover image
+    /// in a series folder doesn't create a phantom entry.
+    static let minimumLooseImages = 2
+
+    /// True when a folder should be treated as one comic rather than walked into.
+    ///
+    /// A folder holding comic archives is a series folder that happens to have
+    /// a cover image sitting in it, so it's explicitly excluded.
+    static func qualifiesAsLooseComic(_ dir: URL) -> Bool {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]
+        ) else { return false }
+
+        var images = 0
+        for url in contents {
+            if ComicArchive.Format(fileExtension: url.pathExtension) != nil { return false }
+            if isImage(url) { images += 1 }
+        }
+        return images >= minimumLooseImages
+    }
+
     /// Images anywhere under a directory — archives often nest pages in a folder.
     static func imagesRecursively(in dir: URL) -> [URL] {
         guard let enumerator = FileManager.default.enumerator(
@@ -92,7 +114,7 @@ nonisolated enum ArchiveSupport {
 
 nonisolated struct ArchiveExtractorRouter {
     static func extractor(for url: URL) throws -> ArchiveExtractor {
-        guard let format = ComicArchive.Format(fileExtension: url.pathExtension) else {
+        guard let format = ComicArchive.Format.detect(url) else {
             throw ArchiveError.unsupportedFormat(url.pathExtension)
         }
         switch format.backend {
@@ -100,6 +122,7 @@ nonisolated struct ArchiveExtractorRouter {
         case .unrar: return CBRExtractor()
         case .bsdtar: return BSDTarExtractor()
         case .pdfKit: return PDFExtractor()
+        case .loose: return FolderExtractor()
         }
     }
 }
@@ -150,6 +173,32 @@ nonisolated struct CBZExtractor: ArchiveExtractor {
         var data = Data()
         _ = try archive.extract(imageEntries[0].entry) { data.append($0) }
         guard !data.isEmpty else { throw ArchiveError.emptyArchive }
+        return data
+    }
+}
+
+// MARK: - Loose images (a folder of pages)
+
+/// Reads a folder of images as a comic.
+///
+/// Nothing is unpacked — the pages are already files on disk, so this is the
+/// only backend where opening an issue costs nothing.
+nonisolated struct FolderExtractor: ArchiveExtractor {
+    func extractPages(from archiveURL: URL) throws -> [ComicPage] {
+        let images = ArchiveSupport.imagesRecursively(in: archiveURL)
+        guard !images.isEmpty else { throw ArchiveError.emptyArchive }
+        return images.enumerated().map { ComicPage(index: $0.offset, imageURL: $0.element) }
+    }
+
+    func pageCount(of archiveURL: URL) throws -> Int {
+        ArchiveSupport.imagesRecursively(in: archiveURL).count
+    }
+
+    func coverImageData(from archiveURL: URL) throws -> Data {
+        guard let first = ArchiveSupport.imagesRecursively(in: archiveURL).first,
+              let data = try? Data(contentsOf: first), !data.isEmpty else {
+            throw ArchiveError.emptyArchive
+        }
         return data
     }
 }

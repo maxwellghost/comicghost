@@ -61,12 +61,17 @@ enum CoverSize: String, CaseIterable, Identifiable {
 /// What the detail pane is currently showing.
 enum LibraryRoute: Hashable {
     case filter(LibraryFilter)
-    case master(String)          // umbrella folder, e.g. "Dragon Ball"
     case series(String)
     case collection(UUID)
     case label(UUID)
     case stats
     case tools
+    case notes
+    case bookmarks
+    case imports
+    case index
+    /// Everything credited to one person, character, arc, publisher or genre.
+    case facet(String, String)
 }
 
 struct GlassBackdrop: View {
@@ -115,6 +120,9 @@ struct LibraryView: View {
     @AppStorage("restoreWindowState") private var restoreState: Bool = true
     @AppStorage("lastRoute") private var lastRouteRaw: String = ""
     @AppStorage("seriesExpanded") private var seriesExpanded: Bool = true
+    /// Which franchise and series nodes are open, newline-separated so the tree
+    /// survives relaunch without a model of its own.
+    @AppStorage("expandedTreeNodes") private var expandedNodesRaw: String = ""
     @AppStorage("shelfRecentExpanded") private var recentExpanded: Bool = true
     @AppStorage("shelfContinueExpanded") private var continueExpanded: Bool = true
 
@@ -133,6 +141,13 @@ struct LibraryView: View {
     @State private var showLabelManager = false
     @State private var keyboardSelection: UUID?
     @State private var openAtEnd = false
+    @State private var pendingBookmarkPage: Int?
+    @State private var showPalette = false
+    @State private var fieldEdit: SeriesFieldEdit?
+    @State private var renameNodeKind: TreeNode.Kind?
+    @State private var renameNodeOld: String?
+    @State private var groupRenameDraft = ""
+    @AppStorage("groupByPublisher") private var groupByPublisher: Bool = true
     @State private var keyMonitor: Any?
     @State private var openRequests = OpenRequests.shared
     @State private var isDropTargeted = false
@@ -153,17 +168,21 @@ struct LibraryView: View {
                 ReaderView(
                     item: openedItem,
                     onClose: {
+                        pendingBookmarkPage = nil
                         withAnimation(.easeInOut(duration: 0.3)) { self.openedItem = nil }
                     },
                     onOpenNext: { next in
                         openAtEnd = false
+                        pendingBookmarkPage = nil
                         withAnimation(.easeInOut(duration: 0.3)) { self.openedItem = next }
                     },
                     onOpenPrevious: { previous in
                         openAtEnd = true
+                        pendingBookmarkPage = nil
                         withAnimation(.easeInOut(duration: 0.3)) { self.openedItem = previous }
                     },
-                    startAtEnd: openAtEnd
+                    startAtEnd: openAtEnd,
+                    startAtPage: pendingBookmarkPage
                 )
                 .id(openedItem.id)
                 .transition(.asymmetric(
@@ -175,6 +194,59 @@ struct LibraryView: View {
             }
         }
         .background(CGTheme.base)
+        .overlay {
+            if showPalette {
+                CommandPalette(entries: paletteEntries, isPresented: $showPalette)
+                    .transition(.opacity)
+            }
+        }
+        .background {
+            Button("") { showPalette.toggle() }
+                .keyboardShortcut("k", modifiers: .command)
+                .opacity(0)
+        }
+        .sheet(item: $fieldEdit) { edit in
+            SeriesGroupSheet(
+                field: edit.field,
+                seriesName: edit.displayName,
+                issueCount: edit.items.count,
+                existingGroups: edit.field == .publisher
+                    ? existingPublishers
+                    : existingSeriesGroups,
+                currentGroup: edit.current,
+                onApply: { value in
+                    applyFieldEdit(edit, value: value)
+                    fieldEdit = nil
+                },
+                onCancel: { fieldEdit = nil }
+            )
+        }
+        .sheet(isPresented: Binding(
+            get: { renameNodeOld != nil },
+            set: { if !$0 { renameNodeOld = nil } }
+        )) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(renameNodeKind == .publisher ? "Rename Publisher" : "Rename Series Group")
+                    .font(.headline)
+                    .foregroundStyle(CGTheme.text)
+                TextField("Name", text: $groupRenameDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { commitGroupRename() }
+                Text("Applies to every issue currently under it. Your files aren't modified.")
+                    .font(.caption2)
+                    .foregroundStyle(CGTheme.subtext0)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { renameNodeOld = nil }
+                        .keyboardShortcut(.cancelAction)
+                    Button("Rename") { commitGroupRename() }
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(20)
+            .frame(width: 380)
+            .background(CGTheme.base)
+        }
         .onAppear {
             restoreIfEnabled()
             startKeyMonitor()
@@ -219,13 +291,16 @@ struct LibraryView: View {
     private func persist(_ route: LibraryRoute) {
         switch route {
         case .filter(let f): lastRouteRaw = "filter:\(f.rawValue)"
-        case .master(let name): lastRouteRaw = "master:\(name)"
         case .series(let name): lastRouteRaw = "series:\(name)"
         case .collection(let id): lastRouteRaw = "collection:\(id.uuidString)"
         case .label(let id): lastRouteRaw = "label:\(id.uuidString)"
-        case .label(let id): lastRouteRaw = "label:\(id.uuidString)"
         case .stats: lastRouteRaw = "stats"
         case .tools: lastRouteRaw = "tools"
+        case .notes: lastRouteRaw = "notes"
+        case .bookmarks: lastRouteRaw = "bookmarks"
+        case .imports: lastRouteRaw = "imports"
+        case .index: lastRouteRaw = "index"
+        case .facet(let kind, let value): lastRouteRaw = "facet:\(kind)|\(value)"
         }
     }
 
@@ -233,20 +308,24 @@ struct LibraryView: View {
         guard restoreState, !didRestore else { return }
         didRestore = true
         let parts = lastRouteRaw.split(separator: ":", maxSplits: 1).map(String.init)
-        guard parts.count == 2 || lastRouteRaw == "stats" || lastRouteRaw == "tools" else { return }
+        let bare: Set<String> = ["stats", "tools", "notes", "bookmarks", "imports", "index"]
+        guard parts.count == 2 || bare.contains(lastRouteRaw) else { return }
         if lastRouteRaw == "stats" { route = .stats; return }
         if lastRouteRaw == "tools" { route = .tools; return }
+        if lastRouteRaw == "notes" { route = .notes; return }
+        if lastRouteRaw == "bookmarks" { route = .bookmarks; return }
+        if lastRouteRaw == "imports" { route = .imports; return }
+        if lastRouteRaw == "index" { route = .index; return }
         switch parts[0] {
         case "filter":
             if let f = LibraryFilter(rawValue: parts[1]) { route = .filter(f) }
-        case "master":
-            route = .master(parts[1])
         case "series":
             route = .series(parts[1])
         case "collection":
             if let id = UUID(uuidString: parts[1]) { route = .collection(id) }
-        case "label":
-            if let id = UUID(uuidString: parts[1]) { route = .label(id) }
+        case "facet":
+            let pieces = parts[1].split(separator: "|", maxSplits: 1).map(String.init)
+            if pieces.count == 2 { route = .facet(pieces[0], pieces[1]) }
         case "label":
             if let id = UUID(uuidString: parts[1]) { route = .label(id) }
         default: break
@@ -259,6 +338,90 @@ struct LibraryView: View {
             route = .series(newName.trimmingCharacters(in: .whitespaces))
         }
         try? context.save()
+    }
+
+    // MARK: - Command palette
+
+    /// Series, issues, and the handful of actions worth reaching by keyboard.
+    private var paletteEntries: [CommandPalette.Entry] {
+        var entries: [CommandPalette.Entry] = []
+
+        entries.append(contentsOf: [
+            CommandPalette.Entry(kind: .action, title: "Scan All Libraries",
+                                 subtitle: "Look for new comics", symbol: "arrow.clockwise") {
+                Task { await ingest.syncAll(context: context) }
+            },
+            CommandPalette.Entry(kind: .action, title: "Recent Import",
+                                 subtitle: "Review the last batch", symbol: "tray.and.arrow.down") {
+                route = .imports
+            },
+            CommandPalette.Entry(kind: .action, title: "Bookmarks",
+                                 subtitle: nil, symbol: "bookmark") { route = .bookmarks },
+            CommandPalette.Entry(kind: .action, title: "Notes",
+                                 subtitle: nil, symbol: "note.text") { route = .notes },
+            CommandPalette.Entry(kind: .action, title: "Index",
+                                 subtitle: "Creators, characters, arcs", symbol: "person.2") {
+                route = .index
+            },
+            CommandPalette.Entry(kind: .action, title: "Stats",
+                                 subtitle: nil, symbol: "chart.bar") { route = .stats },
+            CommandPalette.Entry(kind: .action, title: "Library Tools",
+                                 subtitle: "Gaps, duplicates, integrity", symbol: "wrench.and.screwdriver") {
+                route = .tools
+            },
+            CommandPalette.Entry(kind: .action, title: "Reading List",
+                                 subtitle: nil, symbol: "text.badge.plus") {
+                route = .filter(.readingList)
+            },
+            CommandPalette.Entry(kind: .action, title: "Random Unread",
+                                 subtitle: "Open something at random", symbol: "shuffle") {
+                openRandomUnread()
+            },
+        ])
+
+        for series in allSeries {
+            let unreadSuffix = series.nextUnread.map { " · next: \($0.title)" } ?? ""
+            entries.append(
+                CommandPalette.Entry(
+                    kind: .series(series.name),
+                    title: series.name,
+                    subtitle: "\(series.items.count) issues" + unreadSuffix,
+                    symbol: "square.stack"
+                ) { route = .series(series.name) }
+            )
+
+            if let next = series.nextUnread {
+                entries.append(
+                    CommandPalette.Entry(
+                        kind: .issue(next),
+                        title: "Continue \(series.name)",
+                        subtitle: next.title,
+                        symbol: "play.fill"
+                    ) {
+                        openAtEnd = false
+                        pendingBookmarkPage = nil
+                        withAnimation(.easeInOut(duration: 0.3)) { openedItem = next }
+                    }
+                )
+            }
+        }
+
+        for item in items {
+            entries.append(
+                CommandPalette.Entry(
+                    kind: .issue(item),
+                    title: item.title,
+                    subtitle: item.seriesKey,
+                    symbol: "book"
+                ) {
+                    openAtEnd = false
+                    pendingBookmarkPage = nil
+                    withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+                }
+            )
+        }
+
+        return entries
     }
 
     // MARK: - macOS integration
@@ -526,14 +689,7 @@ struct LibraryView: View {
     /// Where the toolbar back button goes from the current route.
     private var backDestination: LibraryRoute? {
         switch route {
-        case .series(let name):
-            // If this series sits under an umbrella, go back to it.
-            if let item = scopedItems.first(where: { $0.seriesKey == name }),
-               item.hasMaster, let master = item.masterSeries, master != name {
-                return .master(master)
-            }
-            return .filter(activeFilter)
-        case .master:
+        case .series:
             return .filter(activeFilter)
         default:
             return nil
@@ -588,6 +744,42 @@ struct LibraryView: View {
                     withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
                 }
 
+            case .notes:
+                NotesView(items: items) { item in
+                    openAtEnd = false
+                    withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+                }
+
+            case .bookmarks:
+                BookmarksView(items: items) { item, page in
+                    openAtEnd = false
+                    pendingBookmarkPage = page
+                    withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+                }
+
+            case .imports:
+                ImportReviewView(items: items) { item in
+                    openAtEnd = false
+                    withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+                }
+
+            case .index:
+                CreditsIndexView(items: scopedItems) { facet, value in
+                    route = .facet(facet.rawValue, value)
+                }
+
+            case .facet(let kind, let value):
+                let matched = sortItems(facetItems(kind: kind, value: value))
+                if matched.isEmpty {
+                    GhostEmptyState(
+                        title: "Nothing here",
+                        message: "No comics are credited to \(value).",
+                        accent: accent
+                    )
+                } else {
+                    issueCollection(for: matched)
+                }
+
             case .collection(let id):
                 if let collection = collections.first(where: { $0.id == id }) {
                     let matched = sortItems(collection.matches(items))
@@ -616,28 +808,6 @@ struct LibraryView: View {
                     issueCollection(for: labelItems)
                 }
 
-            case .master(let name):
-                let children = series(inMaster: name)
-                if children.count == 1, let only = children.first, only.name == name {
-                    seriesDetail(only)   // umbrella with a single series — skip a level
-                } else if children.isEmpty {
-                    GhostEmptyState(title: "Nothing here", message: "", accent: accent)
-                } else {
-                    seriesGrid(children)
-                }
-
-            case .label(let id):
-                let tagged = sortItems(scopedItems.filter { $0.hasLabel(id) })
-                if tagged.isEmpty {
-                    GhostEmptyState(
-                        title: "Nothing labelled yet",
-                        message: "Right-click any comic and use the Labels menu to tag it.",
-                        accent: accent
-                    )
-                } else {
-                    issueCollection(for: tagged)
-                }
-
             case .series(let name):
                 if let series = allSeries.first(where: { $0.name == name }) {
                     seriesDetail(series)
@@ -655,13 +825,13 @@ struct LibraryView: View {
     private func filterContent(_ f: LibraryFilter) -> some View {
         if f == .readingList {
             readingListContent
-        } else if masterGroups.isEmpty {
+        } else if topLevelGroups.isEmpty {
             emptyState
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 if f == .library, !continueReading.isEmpty { continueShelf }
                 if f == .library, !recentlyAdded.isEmpty { recentlyAddedShelf }
-                seriesGrid(masterGroups)
+                seriesGrid(topLevelGroups)
             }
         }
     }
@@ -833,13 +1003,15 @@ struct LibraryView: View {
         switch route {
         case .stats: return "Stats"
         case .tools: return "Library Tools"
+        case .notes: return "Notes"
+        case .bookmarks: return "Bookmarks"
+        case .imports: return "Recent Import"
+        case .index: return "Index"
+        case .facet(_, let value): return value
         case .label(let id): return labels.first { $0.id == id }?.name ?? "Label"
-        case .master(let name): return name
         case .series(let name): return name
         case .collection(let id):
             return collections.first(where: { $0.id == id })?.name ?? "Collection"
-        case .label(let id):
-            return allLabels.first(where: { $0.id == id })?.name ?? "Label"
         case .filter(let f): return f == .library ? "Comic Ghost" : f.rawValue
         }
     }
@@ -848,10 +1020,6 @@ struct LibraryView: View {
         if case .series(let name) = route,
            let series = allSeries.first(where: { $0.name == name }) {
             return series.coverPath
-        }
-        if case .master(let name) = route,
-           let group = masterGroups.first(where: { $0.name == name }) {
-            return group.coverPath
         }
         return filteredItems.first?.coverThumbnailPath ?? items.first?.coverThumbnailPath
     }
@@ -1062,6 +1230,10 @@ struct LibraryView: View {
                 sidebarLabel("Insights").padding(.top, 10)
                 statsRow
                 toolsRow
+                notesRow
+                bookmarksRow
+                importsRow
+                indexRow
 
                 Spacer(minLength: 20)
             }
@@ -1190,54 +1362,542 @@ struct LibraryView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .contextMenu {
+                Toggle("Group by Publisher", isOn: $groupByPublisher)
+            }
 
             if seriesExpanded {
-                ForEach(allSeries) { series in
-                    seriesRow(series)
+                ForEach(visibleTreeRows) { row in
+                    treeRowView(row)
                 }
             }
         }
         .padding(.top, 10)
     }
 
-    private func seriesRow(_ series: Series) -> some View {
+    // MARK: - Series groups and publishers
+
+    /// What a Set Series Group / Set Publisher sheet is currently editing.
+    /// Carries the items directly so it works for one series or a whole node.
+    struct SeriesFieldEdit: Identifiable {
+        let id = UUID()
+        let field: SeriesGroupSheet.Field
+        let displayName: String
+        let items: [LibraryItem]
+        let current: String?
+    }
+
+    private var existingPublishers: [String] {
+        Set(items.compactMap(\.publisherName))
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// The single agreed value across a set of issues, or nil when they differ.
+    private func agreedValue(_ values: [String?]) -> String? {
+        let set = Set(values.compactMap { $0 })
+        return set.count == 1 ? set.first : nil
+    }
+
+    private func applyFieldEdit(_ edit: SeriesFieldEdit, value: String?) {
+        for item in edit.items {
+            switch edit.field {
+            case .seriesGroup: item.seriesGroupName = value
+            case .publisher: item.publisherName = value
+            }
+        }
+        try? context.save()
+
+        if let value, edit.field == .seriesGroup {
+            expandPath(toGroupNamed: value)
+        }
+    }
+
+
+    private var existingSeriesGroups: [String] {
+        Set(items.compactMap(\.seriesGroupName))
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// The group a series belongs to, when its issues agree on one.
+    private func currentGroup(of series: Series) -> String? {
+        let groups = Set(series.items.compactMap(\.seriesGroupName))
+        return groups.count == 1 ? groups.first : nil
+    }
+
+    /// Expands a franchise and every node above it.
+    ///
+    /// Ids are full paths now, so the node can't be guessed by name — it has to
+    /// be found in the freshly rebuilt tree.
+    private func expandPath(toGroupNamed name: String) {
+        var set = expandedNodes
+
+        func walk(_ nodes: [TreeNode], ancestors: [String]) {
+            for node in nodes {
+                if node.kind == .group, node.name == name {
+                    for ancestor in ancestors { set.insert(ancestor) }
+                    set.insert(node.id)
+                }
+                walk(node.children, ancestors: ancestors + [node.id])
+            }
+        }
+
+        walk(seriesTree, ancestors: [])
+        expandedNodesRaw = set.sorted().joined(separator: "\n")
+    }
+
+    private func renameSeriesGroup(_ old: String, to new: String) {
+        let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != old else { return }
+        for item in items where item.seriesGroupName == old {
+            item.seriesGroupName = trimmed
+        }
+        try? context.save()
+    }
+
+    private func commitGroupRename() {
+        let trimmed = groupRenameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let old = renameNodeOld, !trimmed.isEmpty, trimmed != old {
+            switch renameNodeKind {
+            case .publisher:
+                for item in items where item.publisherName == old {
+                    item.publisherName = trimmed
+                }
+                try? context.save()
+            default:
+                renameSeriesGroup(old, to: trimmed)
+            }
+        }
+        renameNodeOld = nil
+        renameNodeKind = nil
+    }
+
+    private func ungroupAll(_ group: String) {
+        for item in items where item.seriesGroupName == group {
+            item.seriesGroupName = nil
+        }
+        try? context.save()
+    }
+
+    @ViewBuilder
+    private func seriesContextMenu(_ series: Series) -> some View {
+        if let next = series.nextUnread {
+            Button {
+                openAtEnd = false
+                pendingBookmarkPage = nil
+                withAnimation(.easeInOut(duration: 0.3)) { openedItem = next }
+            } label: {
+                Label("Continue: \(next.title)", systemImage: "play.fill")
+            }
+            Divider()
+        }
+
+        Button {
+            fieldEdit = SeriesFieldEdit(
+                field: .seriesGroup,
+                displayName: series.name,
+                items: series.items,
+                current: currentGroup(of: series)
+            )
+        } label: {
+            Label(currentGroup(of: series) == nil ? "Set Series Group…" : "Change Series Group…",
+                  systemImage: "square.stack")
+        }
+
+        Button {
+            fieldEdit = SeriesFieldEdit(
+                field: .publisher,
+                displayName: series.name,
+                items: series.items,
+                current: agreedValue(series.items.map(\.publisherName))
+            )
+        } label: {
+            Label("Set Publisher…", systemImage: "building.2")
+        }
+
+        Button { renameTarget = series } label: {
+            Label("Rename Series…", systemImage: "pencil")
+        }
+
+        Divider()
+
+        Button {
+            for item in series.items { StatusActions.markRead(item, context: context) }
+            try? context.save()
+        } label: {
+            Label("Mark All as Read", systemImage: "checkmark.circle")
+        }
+
+        Button {
+            for item in series.items { StatusActions.markUnread(item, context: context) }
+            try? context.save()
+        } label: {
+            Label("Mark All as Unread", systemImage: "circle")
+        }
+    }
+
+    // MARK: - Tree expansion
+
+    /// Expanded node ids, persisted so the tree survives relaunch.
+    /// Ids are full paths, so the same series under a different parent is a
+    /// distinct node with its own state.
+    private var expandedNodes: Set<String> {
+        Set(expandedNodesRaw.split(separator: "\n").map(String.init))
+    }
+
+    private func isExpanded(_ id: String) -> Bool {
+        expandedNodes.contains(id)
+    }
+
+    private func toggleExpanded(_ id: String) {
+        var set = expandedNodes
+        if set.contains(id) { set.remove(id) } else { set.insert(id) }
+        expandedNodesRaw = set.sorted().joined(separator: "\n")
+    }
+
+    // MARK: - Series tree
+
+    /// One node in the sidebar tree: publisher, franchise, or series.
+    ///
+    /// Flattened into rows before rendering rather than built recursively —
+    /// a recursive ViewBuilder can't type-check itself, and a flat ForEach
+    /// keeps a 1,400-issue library from rebuilding nested stacks.
+    struct TreeNode: Identifiable {
+        enum Kind: String { case publisher, group, series }
+
+        let kind: Kind
+        let name: String
+        let children: [TreeNode]
+        /// Set only when kind == .series.
+        let series: Series?
+        /// Unique across kinds — "Marvel" the publisher and "Marvel" the
+        /// franchise must not share an id or ForEach renders one twice.
+        let id: String
+
+        var issues: [LibraryItem] {
+            if let series { return series.items }
+            return children.flatMap(\.issues)
+        }
+
+        var unreadCount: Int {
+            issues.filter { $0.status != .completed }.count
+        }
+
+        var symbol: String? {
+            switch kind {
+            case .publisher: return "building.2"
+            case .group: return "square.stack"
+            case .series: return nil
+            }
+        }
+    }
+
+    private enum TreeRow: Identifiable {
+        case node(LibraryView.TreeNode, Int)
+        case issue(LibraryItem, Int)
+
+        var id: String {
+            switch self {
+            case .node(let node, _): return node.id
+            case .issue(let item, let depth): return "issue:\(depth):\(item.id.uuidString)"
+            }
+        }
+    }
+
+    /// Builds the franchise + series levels for one set of series.
+    private func groupLevel(_ list: [Series], pathPrefix: String) -> [TreeNode] {
+        var grouped: [String: [Series]] = [:]
+        var ungrouped: [Series] = []
+
+        for series in list {
+            // A series joins a franchise only if its issues agree on one.
+            let groups = Set(series.items.compactMap(\.seriesGroupName))
+            if groups.count == 1, let group = groups.first {
+                grouped[group, default: []].append(series)
+            } else {
+                ungrouped.append(series)
+            }
+        }
+
+        func seriesNode(_ series: Series, prefix: String) -> TreeNode {
+            TreeNode(kind: .series, name: series.name, children: [],
+                     series: series, id: prefix + "series:" + series.name)
+        }
+
+        // A franchise is usually named after its flagship series; absorb it so
+        // "Dragon Ball" doesn't sit beside a "Dragon Ball" group holding only Z.
+        var loose: [TreeNode] = []
+        for series in ungrouped {
+            if grouped[series.name] != nil {
+                grouped[series.name]?.append(series)
+            } else {
+                loose.append(seriesNode(series, prefix: pathPrefix))
+            }
+        }
+
+        var franchises: [TreeNode] = []
+        for (name, children) in grouped {
+            let sorted = children.sorted {
+                $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            }
+            // A group holding only its own namesake adds a level for nothing.
+            if sorted.count == 1, let only = sorted.first, only.name == name {
+                loose.append(seriesNode(only, prefix: pathPrefix))
+                continue
+            }
+            let groupPath = pathPrefix + "group:" + name + "/"
+            franchises.append(
+                TreeNode(
+                    kind: .group,
+                    name: name,
+                    children: sorted.map { seriesNode($0, prefix: groupPath) },
+                    series: nil,
+                    id: pathPrefix + "group:" + name
+                )
+            )
+        }
+
+        return (franchises + loose)
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// Top of the tree. Publishers when enabled and known, franchises and
+    /// series otherwise.
+    private var seriesTree: [TreeNode] {
+        guard groupByPublisher else { return groupLevel(allSeries, pathPrefix: "") }
+
+        var byPublisher: [String: [Series]] = [:]
+        var unknown: [Series] = []
+
+        for series in allSeries {
+            let publishers = Set(series.items.compactMap(\.publisherName))
+            if publishers.count == 1, let publisher = publishers.first {
+                byPublisher[publisher, default: []].append(series)
+            } else {
+                unknown.append(series)
+            }
+        }
+
+        let publishers = byPublisher.map { name, list -> TreeNode in
+            let prefix = "publisher:" + name + "/"
+            return TreeNode(
+                kind: .publisher,
+                name: name,
+                children: groupLevel(list, pathPrefix: prefix),
+                series: nil,
+                id: "publisher:" + name
+            )
+        }
+
+        // Series with no publisher sit at the top rather than under a bucket
+        // called "Unknown" — the library shouldn't invent a label.
+        return (publishers + groupLevel(unknown, pathPrefix: ""))
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// The tree as a flat list of visible rows, honouring what's expanded.
+    private var visibleTreeRows: [TreeRow] {
+        var rows: [TreeRow] = []
+
+        func walk(_ nodes: [TreeNode], depth: Int) {
+            for node in nodes {
+                rows.append(.node(node, depth))
+                guard isExpanded(node.id) else { continue }
+                if let series = node.series {
+                    for item in sortItems(series.items) {
+                        rows.append(.issue(item, depth + 1))
+                    }
+                } else {
+                    walk(node.children, depth: depth + 1)
+                }
+            }
+        }
+
+        walk(seriesTree, depth: 0)
+        return rows
+    }
+
+    private func indent(for depth: Int) -> CGFloat {
+        12 + CGFloat(depth) * 13
+    }
+
+    @ViewBuilder
+    private func treeRowView(_ row: TreeRow) -> some View {
+        switch row {
+        case .issue(let item, let depth):
+            issueRow(item, indent: indent(for: depth) + 10)
+
+        case .node(let node, let depth):
+            if let series = node.series {
+                seriesRow(series, nodeID: node.id, indent: indent(for: depth))
+                    .contextMenu { seriesContextMenu(series) }
+            } else {
+                disclosureRow(
+                    title: node.name,
+                    count: node.unreadCount,
+                    indent: indent(for: depth),
+                    isOpen: isExpanded(node.id),
+                    isSelected: false,
+                    symbol: node.symbol,
+                    onToggle: {
+                        withAnimation(.easeOut(duration: 0.16)) { toggleExpanded(node.id) }
+                    }
+                )
+                .contextMenu { nodeContextMenu(node) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func nodeContextMenu(_ node: TreeNode) -> some View {
+        Button {
+            renameNodeKind = node.kind
+            renameNodeOld = node.name
+            groupRenameDraft = node.name
+        } label: {
+            Label(node.kind == .publisher ? "Rename Publisher…" : "Rename Group…",
+                  systemImage: "pencil")
+        }
+
+        if node.kind == .group {
+            Button {
+                fieldEdit = SeriesFieldEdit(
+                    field: .publisher,
+                    displayName: node.name,
+                    items: node.issues,
+                    current: agreedValue(node.issues.map(\.publisherName))
+                )
+            } label: {
+                Label("Set Publisher…", systemImage: "building.2")
+            }
+        }
+
+        Divider()
+
+        Button {
+            for item in node.issues { StatusActions.markRead(item, context: context) }
+            try? context.save()
+        } label: {
+            Label("Mark All as Read", systemImage: "checkmark.circle")
+        }
+
+        Button {
+            for item in node.issues { StatusActions.markUnread(item, context: context) }
+            try? context.save()
+        } label: {
+            Label("Mark All as Unread", systemImage: "circle")
+        }
+
+        if node.kind == .group {
+            Divider()
+            Button(role: .destructive) {
+                ungroupAll(node.name)
+            } label: {
+                Label("Ungroup \(node.children.count) Series", systemImage: "rectangle.split.3x1")
+            }
+        }
+    }
+
+    /// Chevron plus label. Tapping the chevron opens; tapping the label runs
+    /// `onSelect` when there is one, so expanding never costs you a navigation.
+    private func disclosureRow(
+        title: String,
+        count: Int,
+        indent: CGFloat,
+        isOpen: Bool,
+        isSelected: Bool,
+        symbol: String? = nil,
+        onToggle: @escaping () -> Void,
+        onSelect: (() -> Void)? = nil
+    ) -> some View {
+        HStack(spacing: 6) {
+            Button(action: onToggle) {
+                Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(CGTheme.subtext0.opacity(0.8))
+                    .frame(width: 12, height: 14)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                if let onSelect { onSelect() } else { onToggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    if let symbol {
+                        Image(systemName: symbol)
+                            .font(.system(size: 10))
+                            .foregroundStyle(CGTheme.subtext0.opacity(0.8))
+                    }
+                    Text(title)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    if count > 0 {
+                        Text("\(count)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(CGTheme.subtext0)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .font(.callout)
+        .foregroundStyle(isSelected ? CGTheme.text : CGTheme.subtext1)
+        .padding(.leading, indent)
+        .padding(.trailing, 10)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected ? CGTheme.surface0.opacity(glassEnabled ? 0.7 : 1) : .clear)
+        }
+    }
+
+    private func issueRow(_ item: LibraryItem, indent: CGFloat) -> some View {
+        Button {
+            openAtEnd = false
+            pendingBookmarkPage = nil
+            withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+        } label: {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(item.status == .completed ? CGTheme.subtext0.opacity(0.35) : accent)
+                    .frame(width: 5, height: 5)
+                Text(item.title)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+            }
+            .font(.caption)
+            .foregroundStyle(CGTheme.subtext0)
+            .padding(.leading, indent)
+            .padding(.trailing, 10)
+            .padding(.vertical, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func seriesRow(_ series: Series, nodeID: String, indent: CGFloat) -> some View {
         let isSelected: Bool = {
             if case .series(let name) = route { return name == series.name }
             return false
         }()
         let unread = series.items.filter { $0.status != .completed }.count
 
-        return Button {
-            route = .series(series.name)
-        } label: {
-            HStack(spacing: 8) {
-                Text(series.name)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 4)
-                if unread > 0 {
-                    Text("\(unread)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(CGTheme.subtext0)
-                }
-            }
-            .font(.callout)
-            .foregroundStyle(isSelected ? CGTheme.text : CGTheme.subtext1)
-            .padding(.leading, 22)
-            .padding(.trailing, 10)
-            .padding(.vertical, 5)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isSelected ? CGTheme.surface0.opacity(glassEnabled ? 0.7 : 1) : .clear)
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button("Rename Series…") { renameTarget = series }
-            Button("Merge Into…") { mergeSource = series }
-        }
+        return disclosureRow(
+            title: series.name,
+            count: unread,
+            indent: indent,
+            isOpen: isExpanded(nodeID),
+            isSelected: isSelected,
+            onToggle: {
+                withAnimation(.easeOut(duration: 0.16)) { toggleExpanded(nodeID) }
+            },
+            onSelect: { route = .series(series.name) }
+        )
     }
 
     private func collectionRow(_ collection: SmartCollection) -> some View {
@@ -1397,6 +2057,94 @@ struct LibraryView: View {
         .buttonStyle(.plain)
     }
 
+    private func insightsRow(_ title: String,
+                             symbol: String,
+                             target: LibraryRoute) -> some View {
+        let isSelected = route == target
+        return Button {
+            route = target
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: symbol)
+                    .frame(width: 18)
+                    .foregroundStyle(isSelected ? accent : CGTheme.subtext1)
+                Text(title)
+                Spacer()
+            }
+            .font(.body)
+            .foregroundStyle(isSelected ? CGTheme.text : CGTheme.subtext1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? CGTheme.surface0.opacity(glassEnabled ? 0.7 : 1) : .clear)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var indexRow: some View {
+        insightsRow("Index", symbol: "person.2", target: .index)
+    }
+
+    /// Items matching one index entry.
+    private func facetItems(kind: String, value: String) -> [LibraryItem] {
+        let facet = CreditsIndexView.Facet(rawValue: kind)
+        return scopedItems.filter { item in
+            switch facet {
+            case .creator:
+                return item.creators.contains { $0.caseInsensitiveCompare(value) == .orderedSame }
+            case .character:
+                return (item.characters + item.teams)
+                    .contains { $0.caseInsensitiveCompare(value) == .orderedSame }
+            case .storyArc:
+                return item.storyArcName?.caseInsensitiveCompare(value) == .orderedSame
+            case .publisher:
+                return item.publisherName?.caseInsensitiveCompare(value) == .orderedSame
+            case .genre:
+                return item.genres.contains { $0.caseInsensitiveCompare(value) == .orderedSame }
+            case nil:
+                return false
+            }
+        }
+    }
+
+    private var bookmarksRow: some View {
+        insightsRow("Bookmarks", symbol: "bookmark", target: .bookmarks)
+    }
+
+    private var importsRow: some View {
+        insightsRow("Recent Import", symbol: "tray.and.arrow.down", target: .imports)
+    }
+
+    private var notesRow: some View {
+        let isSelected = route == .notes
+        return Button {
+            route = .notes
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "note.text")
+                    .frame(width: 18)
+                    .foregroundStyle(isSelected ? accent : CGTheme.subtext1)
+                Text("Notes")
+                Spacer()
+            }
+            .font(.body)
+            .foregroundStyle(isSelected ? CGTheme.text : CGTheme.subtext1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? CGTheme.surface0.opacity(glassEnabled ? 0.7 : 1) : .clear)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+    }
+
     private var toolsRow: some View {
         let isSelected = route == .tools
         return Button {
@@ -1477,17 +2225,9 @@ struct LibraryView: View {
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    /// Top-level groups: umbrella folders plus standalone series.
-    private var masterGroups: [Series] {
-        Dictionary(grouping: filteredItems, by: \.masterKey)
-            .map { Series(name: $0.key, items: $0.value) }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    }
-
-    /// Series inside one umbrella folder.
-    private func series(inMaster master: String) -> [Series] {
-        let members = filteredItems.filter { $0.masterKey == master }
-        return Dictionary(grouping: members, by: \.seriesKey)
+    /// Top-level groups in the grid — one tile per series.
+    private var topLevelGroups: [Series] {
+        Dictionary(grouping: filteredItems, by: \.seriesKey)
             .map { Series(name: $0.key, items: $0.value) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
@@ -1536,27 +2276,37 @@ struct LibraryView: View {
                 SeriesCard(
                     series: group,
                     allItems: items,
-                    subSeriesCount: subSeriesCount(for: group),
                     onRename: { renameTarget = group },
-                    onMerge: { mergeSource = group }
+                    onMerge: { mergeSource = group },
+                    onContinue: { item in
+                        openAtEnd = false
+                        withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+                    },
+                    onSetGroup: {
+                        fieldEdit = SeriesFieldEdit(
+                            field: .seriesGroup,
+                            displayName: group.name,
+                            items: group.items,
+                            current: currentGroup(of: group)
+                        )
+                    },
+                    onSetPublisher: {
+                        fieldEdit = SeriesFieldEdit(
+                            field: .publisher,
+                            displayName: group.name,
+                            items: group.items,
+                            current: agreedValue(group.items.map(\.publisherName))
+                        )
+                    }
                 )
                 .onTapGesture {
                     withAnimation(.easeInOut(duration: 0.22)) {
-                        route = destination(for: group)
+                        route = .series(group.name)
                     }
                 }
             }
         }
         .padding()
-    }
-
-    /// How many distinct series live under this tile (1 = a plain series).
-    private func subSeriesCount(for group: Series) -> Int {
-        Set(group.items.map(\.seriesKey)).count
-    }
-
-    private func destination(for group: Series) -> LibraryRoute {
-        subSeriesCount(for: group) > 1 ? .master(group.name) : .series(group.name)
     }
 
     /// Items currently rendered as an issue grid, for keyboard navigation.

@@ -215,12 +215,18 @@ nonisolated enum MetadataParser {
         )
     }
 
-    private static func readComicInfoXML(from archiveURL: URL) -> String? {
-        guard let format = ComicArchive.Format(fileExtension: archiveURL.pathExtension) else { return nil }
+    /// Internal rather than private so the ingest can pull the <Pages> block
+    /// out of the same XML without opening the archive a second time.
+    static func readComicInfoXML(from archiveURL: URL) -> String? {
+        guard let format = ComicArchive.Format.detect(archiveURL) else { return nil }
 
         switch format.backend {
         case .zipFoundation:
-            guard let archive = try? Archive(url: archiveURL, accessMode: .read) else { return nil }
+            // pathEncoding names the throwing initialiser; without it `try?` resolves
+            // to the deprecated failable overload.
+            guard let archive = try? Archive(url: archiveURL, accessMode: .read, pathEncoding: nil) else {
+                return nil
+            }
             for entry in archive where entry.type == .file {
                 let name = (entry.path as NSString).lastPathComponent.lowercased()
                 guard name == "comicinfo.xml" else { continue }
@@ -246,6 +252,15 @@ nonisolated enum MetadataParser {
 
         case .pdfKit:
             return nil   // PDFs carry their own metadata, not ComicInfo.xml
+
+        case .loose:
+            guard let contents = try? FileManager.default.contentsOfDirectory(
+                at: archiveURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+            ) else { return nil }
+            guard let file = contents.first(where: {
+                $0.lastPathComponent.lowercased() == "comicinfo.xml"
+            }), let data = try? Data(contentsOf: file) else { return nil }
+            return String(data: data, encoding: .utf8)
         }
     }
 

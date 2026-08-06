@@ -7,6 +7,8 @@ struct PageStrip: View {
     var accent: Color = CGTheme.mauve
     /// Manga mode: strip runs right-to-left.
     var rightToLeft: Bool = false
+    /// Page indices where a new issue starts, inside a collected volume.
+    var chapterStarts: Set<Int> = []
     var onSelect: (Int) -> Void
 
     private var displayOrder: [Int] {
@@ -36,9 +38,15 @@ struct PageStrip: View {
         .frame(height: 132)
     }
 
+    private func startsChapter(_ unit: [ComicPage]) -> Bool {
+        guard !chapterStarts.isEmpty else { return false }
+        return unit.contains { chapterStarts.contains($0.index) }
+    }
+
     private func thumbnail(_ unit: [ComicPage], index: Int) -> some View {
         let isCurrent = index == currentUnit
         let ordered = rightToLeft ? Array(unit.reversed()) : unit
+        let isChapterStart = startsChapter(unit)
 
         return Button {
             onSelect(index)
@@ -54,6 +62,15 @@ struct PageStrip: View {
                 .overlay {
                     RoundedRectangle(cornerRadius: 4)
                         .strokeBorder(isCurrent ? accent : CGTheme.surface1, lineWidth: isCurrent ? 2 : 1)
+                }
+                .overlay(alignment: .leading) {
+                    // Marks where one issue ends and the next begins.
+                    if isChapterStart {
+                        Rectangle()
+                            .fill(accent)
+                            .frame(width: 2)
+                            .padding(.vertical, -3)
+                    }
                 }
                 .softGlow(accent, radius: 6, isActive: isCurrent)
 

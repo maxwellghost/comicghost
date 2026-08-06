@@ -19,6 +19,7 @@ struct SettingsView: View {
     @State private var renaming: ComicLibrary?
     @State private var newName = ""
     @State private var backupMessage: String?
+    @State private var libraryMessage: String?
     @State private var expandedThemeFamilies: Set<String> = []
 
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
@@ -57,6 +58,12 @@ struct SettingsView: View {
                 }
 
                 Button("Add Library…") { addLibrary() }
+
+                if let libraryMessage {
+                    Text(libraryMessage)
+                        .font(.caption)
+                        .foregroundStyle(CGTheme.subtext0)
+                }
             }
 
             Section("Theme") {
@@ -366,19 +373,38 @@ struct SettingsView: View {
         .buttonStyle(.plain)
     }
 
+    /// Presents a file panel as its own window.
+    ///
+    /// Two things this avoids. `runModal()` is unreliable from inside the
+    /// Settings scene — the panel can be torn down in the frame it appears,
+    /// which reads as a flicker and silently returns .cancel. And attaching a
+    /// sheet to a guessed host window can land it on the main library window
+    /// behind Settings, where the panel is genuinely open but invisible.
+    ///
+    /// `begin` needs no host at all, and the floating level keeps it in front.
+    private func presentPanel(_ panel: NSSavePanel, completion: @escaping (URL?) -> Void) {
+        NSApp.activate(ignoringOtherApps: true)
+        panel.level = .floating
+        panel.begin { response in
+            completion(response == .OK ? panel.url : nil)
+        }
+    }
+
     private func exportBackup() {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = BackupService.suggestedFilename()
         panel.allowedContentTypes = [.json]
         panel.prompt = "Export"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        do {
-            let payload = BackupService.makePayload(context: context)
-            try BackupService.encode(payload).write(to: url)
-            backupMessage = "Exported \(payload.items.count) issues, \(payload.labels.count) labels, and \(payload.collections.count) collections."
-        } catch {
-            backupMessage = "Export failed: \(error.localizedDescription)"
+        presentPanel(panel) { url in
+            guard let url else { return }
+            do {
+                let payload = BackupService.makePayload(context: context)
+                try BackupService.encode(payload).write(to: url)
+                backupMessage = "Exported \(payload.items.count) issues, \(payload.labels.count) labels, and \(payload.collections.count) collections."
+            } catch {
+                backupMessage = "Export failed: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -388,18 +414,20 @@ struct SettingsView: View {
         panel.canChooseDirectories = false
         panel.allowedContentTypes = [.json]
         panel.prompt = "Restore"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        do {
-            let payload = try BackupService.decode(Data(contentsOf: url))
-            let result = BackupService.restore(payload, context: context)
-            var parts = ["Restored \(result.matched) issues"]
-            if result.missing > 0 { parts.append("\(result.missing) not found in this library") }
-            if result.labelsCreated > 0 { parts.append("\(result.labelsCreated) labels added") }
-            if result.collectionsCreated > 0 { parts.append("\(result.collectionsCreated) collections added") }
-            backupMessage = parts.joined(separator: " · ")
-        } catch {
-            backupMessage = "Restore failed: \(error.localizedDescription)"
+        presentPanel(panel) { url in
+            guard let url else { return }
+            do {
+                let payload = try BackupService.decode(Data(contentsOf: url))
+                let result = BackupService.restore(payload, context: context)
+                var parts = ["Restored \(result.matched) issues"]
+                if result.missing > 0 { parts.append("\(result.missing) not found in this library") }
+                if result.labelsCreated > 0 { parts.append("\(result.labelsCreated) labels added") }
+                if result.collectionsCreated > 0 { parts.append("\(result.collectionsCreated) collections added") }
+                backupMessage = parts.joined(separator: " · ")
+            } catch {
+                backupMessage = "Restore failed: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -409,18 +437,43 @@ struct SettingsView: View {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Add Library"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        let library = ComicLibrary(
-            name: url.lastPathComponent,
-            path: url.path,
-            bookmark: LibraryFolder.bookmark(for: url),
-            sortIndex: libraries.count
-        )
-        context.insert(library)
-        try? context.save()
+        presentPanel(panel) { url in
+            guard let url else { return }
 
-        Task { await LibraryIngest.shared.sync(library: library, context: context) }
+            // Adding the same folder twice would double every issue in it.
+            let existing = libraries.first {
+                $0.path == url.path
+                    || URL(fileURLWithPath: $0.path).standardizedFileURL == url.standardizedFileURL
+            }
+            if let existing {
+                libraryMessage = "\(existing.name) is already a library."
+                return
+            }
+
+            // The bookmark has to be made while the panel's grant is live.
+            guard let bookmark = LibraryFolder.bookmark(for: url) else {
+                libraryMessage = "Couldn't get permission to read that folder."
+                return
+            }
+
+            let library = ComicLibrary(
+                name: url.lastPathComponent,
+                path: url.path,
+                bookmark: bookmark,
+                sortIndex: libraries.count
+            )
+            context.insert(library)
+            try? context.save()
+
+            libraryMessage = "Scanning \(library.name)…"
+            Task {
+                await LibraryIngest.shared.sync(library: library, context: context)
+                libraryMessage = "Added \(library.name)."
+                try? await Task.sleep(for: .seconds(3))
+                libraryMessage = nil
+            }
+        }
     }
 
     /// Removing a library drops its items from the app. Files are untouched.
