@@ -40,7 +40,7 @@ Point it at a folder and it handles the rest — series grouping, cover art, rea
 - Favorites, 1–5 star ratings with series-level averages
 - Reading list queue with drag-to-reorder
 - Specials, annuals, and one-shots detected and grouped apart from the numbered run
-- Remove from library (moves the file to the Trash)
+- Remove from library (option to move item to trash)
 
 ### Reader
 

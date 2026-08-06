@@ -19,6 +19,7 @@ struct SettingsView: View {
     @State private var renaming: ComicLibrary?
     @State private var newName = ""
     @State private var backupMessage: String?
+    @State private var expandedThemeFamilies: Set<String> = []
 
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
 
@@ -59,22 +60,11 @@ struct SettingsView: View {
             }
 
             Section("Theme") {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    // The active theme's family opens by default; the rest stay
+                    // folded so 21 themes don't fill the window.
                     ForEach(CGThemeCatalog.families, id: \.self) { family in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(family.uppercased())
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(CGTheme.subtext0.opacity(0.8))
-
-                            LazyVGrid(
-                                columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 10)],
-                                spacing: 10
-                            ) {
-                                ForEach(CGThemeCatalog.themes(in: family)) { theme in
-                                    themeSwatch(theme)
-                                }
-                            }
-                        }
+                        themeFamilyRow(family)
                     }
                 }
                 .padding(.vertical, 4)
@@ -244,6 +234,77 @@ struct SettingsView: View {
         .padding(22)
         .frame(width: 380)
         .background(CGTheme.base)
+    }
+
+    private func isFamilyExpanded(_ family: String) -> Bool {
+        expandedThemeFamilies.contains(family) || currentFamily == family
+    }
+
+    private var currentFamily: String {
+        CGThemeCatalog.all.first { $0.id == themeID }?.family ?? ""
+    }
+
+    private func themeFamilyRow(_ family: String) -> some View {
+        let themes = CGThemeCatalog.themes(in: family)
+        let expanded = isFamilyExpanded(family)
+        let isCurrent = currentFamily == family
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.easeOut(duration: 0.18)) {
+                    if expandedThemeFamilies.contains(family) {
+                        expandedThemeFamilies.remove(family)
+                    } else {
+                        expandedThemeFamilies.insert(family)
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(CGTheme.subtext0)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+
+                    Text(family)
+                        .font(.callout.weight(isCurrent ? .semibold : .regular))
+                        .foregroundStyle(isCurrent ? CGTheme.text : CGTheme.subtext1)
+
+                    // Colour preview so a folded family still reads at a glance.
+                    HStack(spacing: 3) {
+                        ForEach(themes) { theme in
+                            Circle()
+                                .fill(Color(hex: theme.mauve))
+                                .frame(width: 7, height: 7)
+                        }
+                    }
+                    .padding(.leading, 2)
+
+                    Spacer()
+
+                    if isCurrent {
+                        Text(CGThemeCatalog.all.first { $0.id == themeID }?.name ?? "")
+                            .font(.caption)
+                            .foregroundStyle(CGTheme.subtext0)
+                    }
+                }
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 10)],
+                    spacing: 10
+                ) {
+                    ForEach(themes) { theme in
+                        themeSwatch(theme)
+                    }
+                }
+                .padding(.leading, 18)
+                .padding(.bottom, 4)
+            }
+        }
     }
 
     /// Preview card: surfaces on the left, accents as dots on the right.

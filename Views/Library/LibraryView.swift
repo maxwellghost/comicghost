@@ -115,6 +115,8 @@ struct LibraryView: View {
     @AppStorage("restoreWindowState") private var restoreState: Bool = true
     @AppStorage("lastRoute") private var lastRouteRaw: String = ""
     @AppStorage("seriesExpanded") private var seriesExpanded: Bool = true
+    @AppStorage("shelfRecentExpanded") private var recentExpanded: Bool = true
+    @AppStorage("shelfContinueExpanded") private var continueExpanded: Bool = true
 
     @State private var route: LibraryRoute = .filter(.library)
     @State private var openedItem: LibraryItem?
@@ -875,36 +877,62 @@ struct LibraryView: View {
     }
 
     private var recentlyAddedShelf: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Recently added")
-                .font(.headline)
-                .foregroundStyle(CGTheme.subtext1)
-                .padding(.horizontal)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 16) {
-                    ForEach(recentlyAdded) { item in continueCell(item) }
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 6)
-            }
-        }
-        .padding(.top, 10)
+        shelf(
+            title: "Recently added",
+            count: recentlyAdded.count,
+            isExpanded: $recentExpanded,
+            items: recentlyAdded
+        )
     }
 
     private var continueShelf: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Continue reading")
-                .font(.headline)
-                .foregroundStyle(CGTheme.subtext1)
-                .padding(.horizontal)
+        shelf(
+            title: "Continue reading",
+            count: continueReading.count,
+            isExpanded: $continueExpanded,
+            items: continueReading
+        )
+    }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 16) {
-                    ForEach(continueReading) { item in continueCell(item) }
+    /// Horizontal cover shelf with a collapsible header.
+    private func shelf(
+        title: String,
+        count: Int,
+        isExpanded: Binding<Bool>,
+        items shelfItems: [LibraryItem]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    isExpanded.wrappedValue.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(CGTheme.subtext0)
+                        .rotationEffect(.degrees(isExpanded.wrappedValue ? 90 : 0))
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(CGTheme.subtext1)
+                    Text("\(count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(CGTheme.subtext0)
+                    Spacer()
                 }
                 .padding(.horizontal)
-                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded.wrappedValue {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 16) {
+                        ForEach(shelfItems) { item in continueCell(item) }
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 6)
+                }
             }
         }
         .padding(.top, 10)
