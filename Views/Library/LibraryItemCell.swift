@@ -539,9 +539,11 @@ struct ItemContextMenu: View {
     }
 }
 
-/// Drops the entry and remembers the path so scans skip it. File untouched.
+/// The per-comic half of removal, without saving. Kept separate so the single
+/// and bulk entry points share one copy of the rules and only differ in where
+/// the transaction boundary sits.
 @MainActor
-func removeFromLibraryOnly(_ item: LibraryItem, context: ModelContext) {
+private func dropFromLibrary(_ item: LibraryItem, context: ModelContext) {
     let ignored = IgnoredFile(
         path: item.filePath, title: item.title, seriesName: item.seriesName
     )
@@ -551,16 +553,49 @@ func removeFromLibraryOnly(_ item: LibraryItem, context: ModelContext) {
     // SwiftData traps on instead of snapshotting. Reading a property loads it.
     _ = item.progress?.currentPage
     context.delete(item)
+}
+
+/// Drops the entry and remembers the path so scans skip it. File untouched.
+@MainActor
+func removeFromLibraryOnly(_ item: LibraryItem, context: ModelContext) {
+    dropFromLibrary(item, context: context)
     try? context.save()
 }
 
+/// Same as the single-comic version, in one transaction. A save costs per call
+/// rather than per object, so removing a selection comic by comic pays that
+/// cost once for every comic.
 @MainActor
-func removeFromLibrary(_ item: LibraryItem, context: ModelContext) {
+func removeFromLibraryOnly(_ items: [LibraryItem], context: ModelContext) {
+    for item in items {
+        dropFromLibrary(item, context: context)
+    }
+    try? context.save()
+}
+
+/// Trashes the file and drops the entry, without saving. Same split as
+/// dropFromLibrary, for the same reason.
+@MainActor
+private func trashAndDrop(_ item: LibraryItem, context: ModelContext) {
     let url = URL(fileURLWithPath: item.filePath)
     try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
     // Same cascade fault as removeFromLibraryOnly: load progress before delete.
     _ = item.progress?.currentPage
     context.delete(item)
+}
+
+@MainActor
+func removeFromLibrary(_ item: LibraryItem, context: ModelContext) {
+    trashAndDrop(item, context: context)
+    try? context.save()
+}
+
+/// Same as the single-comic version, in one transaction.
+@MainActor
+func removeFromLibrary(_ items: [LibraryItem], context: ModelContext) {
+    for item in items {
+        trashAndDrop(item, context: context)
+    }
     try? context.save()
 }
 

@@ -641,7 +641,7 @@ struct LibraryView: View {
                 titleVisibility: .visible
             ) {
                 Button("Move to Trash", role: .destructive) {
-                    for item in selectedItems { removeFromLibrary(item, context: context) }
+                    removeFromLibrary(selectedItems, context: context)
                     clearSelection()
                 }
                 Button("Cancel", role: .cancel) { }
@@ -2717,7 +2717,7 @@ struct LibraryView: View {
         Divider()
 
         Button {
-            for item in targets { removeFromLibraryOnly(item, context: context) }
+            removeFromLibraryOnly(targets, context: context)
             clearSelection()
         } label: {
             Label("Remove from Library", systemImage: "minus.circle")
