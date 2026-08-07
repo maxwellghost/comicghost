@@ -67,6 +67,11 @@ final class LibraryAnalysis {
     var totalBytes: Int64 = 0
     var didRunSizes = false
 
+    var coverSummary: String?
+    /// Bumped when cover files change on disk under paths that did not change,
+    /// so grid cells know to re-read them.
+    var coverGeneration = 0
+
     // MARK: - Gaps
 
     /// Numeric part of an issue number: "170b" -> 170, "Annual 3" -> nil.
@@ -208,6 +213,70 @@ final class LibraryAnalysis {
 
         integrityIssues = found
         didRunIntegrity = true
+    }
+
+    // MARK: - Covers
+
+    /// Regenerates every cover thumbnail whose cached file has gone missing.
+    ///
+    /// The cache lives in the container's Caches directory, which macOS and any
+    /// cleanup utility are free to empty. A rescan will not repair it — scans
+    /// skip files already in the library — and the grid only rebuilds a cover
+    /// for a cell it happens to draw, so anything never scrolled past stays
+    /// blank. This is the deliberate sweep.
+    func rebuildMissingCovers(for items: [LibraryItem], context: ModelContext) async {
+        guard !isScanning else { return }
+        isScanning = true
+        scanLabel = "Rebuilding covers"
+        scanProgress = 0
+        coverSummary = nil
+        defer { isScanning = false; scanLabel = "" }
+
+        // Comics sit outside the sandbox, so reading one needs the security
+        // scope its library's bookmark carries. Nothing resolves that at
+        // launch, so without this every extraction below fails on permissions.
+        for library in (try? context.fetch(FetchDescriptor<ComicLibrary>())) ?? [] {
+            _ = library.resolveURL()
+        }
+
+        let missing = items.filter {
+            !FileManager.default.fileExists(atPath: ThumbnailGenerator.cachedPath(for: $0.id).path)
+        }
+        guard !missing.isEmpty else {
+            coverSummary = "Every cover is already cached."
+            scanProgress = 1
+            return
+        }
+
+        let total = missing.count
+        var rebuilt = 0
+        var failed = 0
+
+        for (index, item) in missing.enumerated() {
+            let id = item.id
+            let path = item.filePath
+            let generated = await Task.detached(priority: .utility) { () -> String? in
+                guard FileManager.default.fileExists(atPath: path) else { return nil }
+                return (try? ThumbnailGenerator.thumbnail(for: id, archivePath: path))?.path
+            }.value
+
+            if let generated {
+                item.coverThumbnailPath = generated
+                rebuilt += 1
+            } else {
+                failed += 1
+            }
+            scanProgress = Double(index + 1) / Double(total)
+        }
+
+        try? context.save()
+        // The path a cell watches is unchanged when a thumbnail is rebuilt in
+        // place, so nothing would redraw without this.
+        coverGeneration += 1
+
+        coverSummary = failed == 0
+            ? "Rebuilt \(rebuilt) cover\(rebuilt == 1 ? "" : "s")."
+            : "Rebuilt \(rebuilt), skipped \(failed) whose file could not be read."
     }
 
     // MARK: - Export

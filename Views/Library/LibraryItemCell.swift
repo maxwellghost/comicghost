@@ -19,8 +19,15 @@ struct LibraryItemCell: View {
     @State private var showLabelManager = false
     @State private var showMetadataEditor = false
     @State private var activeNote: ComicNote?
+    @State private var analysis = LibraryAnalysis.shared
 
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
+
+    /// Reloads when the cover path changes, and when a Library Tools rebuild
+    /// replaces the file under a path that stayed the same.
+    private var coverTaskID: String {
+        "\(item.coverThumbnailPath ?? "")#\(analysis.coverGeneration)"
+    }
 
     private var attachedLabels: [ComicLabel] {
         let ids = Set(item.labelIDs)
@@ -85,7 +92,7 @@ struct LibraryItemCell: View {
         } message: {
             Text("Removing from the library leaves the file where it is and stops future scans picking it up. Moving to the Trash deletes it from disk.")
         }
-        .task(id: item.coverThumbnailPath) { await loadCover() }
+        .task(id: coverTaskID) { await loadCover() }
     }
 
     private var coverArea: some View {
@@ -234,6 +241,11 @@ struct LibraryItemRow: View {
     @State private var showMetadataEditor = false
     @State private var activeNote: ComicNote?
     @State private var rowCover: NSImage?
+    @State private var analysis = LibraryAnalysis.shared
+
+    private var coverTaskID: String {
+        "\(item.coverThumbnailPath ?? "")#\(analysis.coverGeneration)"
+    }
 
     /// Same cache-was-wiped recovery the grid cell does, so switching to list
     /// view doesn't show a wall of grey rectangles.
@@ -337,7 +349,7 @@ struct LibraryItemRow: View {
                 .fill(isHovering ? CGTheme.surface0.opacity(0.55) : .clear)
         }
         .onHover { isHovering = $0 }
-        .task(id: item.coverThumbnailPath) { await loadRowCover() }
+        .task(id: coverTaskID) { await loadRowCover() }
         .contextMenu { ItemContextMenu(item: item, allItems: allItems,
                                        showEditSheet: $showEditSheet,
                                        showRemoveConfirm: $showRemoveConfirm,

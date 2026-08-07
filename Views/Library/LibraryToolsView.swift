@@ -20,6 +20,7 @@ struct LibraryToolsView: View {
     @AppStorage("toolsOpenIgnored") private var openIgnored = false
     @AppStorage("toolsOpenStorage") private var openStorage = false
     @AppStorage("toolsOpenIntegrity") private var openIntegrity = false
+    @AppStorage("toolsOpenCovers") private var openCovers = false
     @AppStorage("toolsOpenConvert") private var openConvert = false
     @AppStorage("toolsOpenExport") private var openExport = false
 
@@ -52,6 +53,7 @@ struct LibraryToolsView: View {
             ignoredSection
             storageSection
             integritySection
+            coversSection
             convertSection
             exportSection
         }
@@ -484,6 +486,38 @@ struct LibraryToolsView: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - Covers
+
+    private var coversSection: some View {
+        section("Covers", "Rebuild thumbnails a cache clean-up removed",
+                systemImage: "photo.on.rectangle",
+                isOpen: $openCovers) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Button("Rebuild Missing Covers") {
+                        Task { await analysis.rebuildMissingCovers(for: items, context: context) }
+                    }
+                    .disabled(analysis.isScanning)
+                    Spacer()
+                }
+
+                if let summary = analysis.coverSummary {
+                    Text(summary)
+                        .font(.caption)
+                        .foregroundStyle(CGTheme.subtext1)
+                }
+
+                Text("Thumbnails live in the system cache, which macOS and cleaning tools empty freely. A rescan will not bring them back — it skips files already in the library. This opens every comic whose thumbnail is gone and rebuilds just that one cover, so on a large collection it takes a while. Covers that are already cached are left alone.")
+                    .font(.caption2)
+                    .foregroundStyle(CGTheme.subtext0)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background { card }
         }
     }
 
