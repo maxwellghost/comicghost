@@ -140,6 +140,18 @@ struct LibraryView: View {
     @State private var scanTarget: ComicLibrary?
     @State private var showLabelManager = false
     @State private var keyboardSelection: UUID?
+    /// Multi-selection. Issues and series never render in the same collection,
+    /// so only one of these is ever non-empty.
+    @State private var selectedItemIDs: Set<UUID> = []
+    @State private var selectedSeriesNames: Set<String> = []
+    /// Where a Shift-click range starts from.
+    @State private var itemAnchor: UUID?
+    @State private var seriesAnchor: String?
+    /// Explicit selection mode: a plain click picks instead of opening.
+    @State private var selectionMode = false
+    @State private var showBulkTrashConfirm = false
+    /// Insights sits below the longest scroll in the sidebar, so it folds.
+    @AppStorage("sidebarShowInsights") private var showInsights: Bool = true
     @State private var openAtEnd = false
     @State private var pendingBookmarkPage: Int?
     @State private var showPalette = false
@@ -214,6 +226,7 @@ struct LibraryView: View {
                     ? existingPublishers
                     : existingSeriesGroups,
                 currentGroup: edit.current,
+                scopeDescription: edit.scopeDescription,
                 onApply: { value in
                     applyFieldEdit(edit, value: value)
                     fieldEdit = nil
@@ -538,6 +551,11 @@ struct LibraryView: View {
             ZStack(alignment: .bottom) {
                 ScrollView { content }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // An inset rather than an overlay, so the bar never sits on
+                    // top of a sticky section header.
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        if hasSelection || selectionMode { selectionBar }
+                    }
 
                 if ingest.isImporting { importBanner }
             }
@@ -559,6 +577,37 @@ struct LibraryView: View {
             }
             .overlay {
                 if isDropTargeted { dropOverlay }
+            }
+            .animation(.easeOut(duration: 0.18), value: hasSelection)
+            .animation(.easeOut(duration: 0.18), value: selectionMode)
+            // Escape only exists while there's something to dismiss, so it
+            // can't swallow the key from the search field the rest of the time.
+            .background {
+                if hasSelection || selectionMode {
+                    Button("") {
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            clearSelection()
+                            selectionMode = false
+                        }
+                    }
+                    .keyboardShortcut(.escape, modifiers: [])
+                    .opacity(0)
+                }
+            }
+            .onChange(of: route) { _, _ in clearSelection() }
+            .onChange(of: searchQuery) { _, _ in clearSelection() }
+            .confirmationDialog(
+                "Move \(selectedItems.count) \(selectedItems.count == 1 ? "file" : "files") to the Trash?",
+                isPresented: $showBulkTrashConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Move to Trash", role: .destructive) {
+                    for item in selectedItems { removeFromLibrary(item, context: context) }
+                    clearSelection()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("The files leave your library and go to the Trash, where you can still recover them. This is the one bulk action Cmd+Z won't undo.")
             }
             .overlay(alignment: .bottom) {
                 if let dropMessage {
@@ -613,6 +662,19 @@ struct LibraryView: View {
                 }
             }
 
+            Button {
+                withAnimation(.easeOut(duration: 0.18)) {
+                    selectionMode.toggle()
+                    if !selectionMode { clearSelection() }
+                }
+            } label: {
+                Label(selectionMode ? "Done selecting" : "Select",
+                      systemImage: selectionMode ? "checkmark.circle.fill" : "checkmark.circle")
+            }
+            .help(selectionMode
+                  ? "Leave selection mode"
+                  : "Click covers to select them (or Cmd-click any time)")
+
             Button { openRandomUnread() } label: {
                 Label("Read something", systemImage: "shuffle")
             }
@@ -623,41 +685,34 @@ struct LibraryView: View {
             }
             .help("Settings (⌘,)")
 
-            Button {
-                useListView.toggle()
-            } label: {
-                Label(useListView ? "Grid view" : "List view",
-                      systemImage: useListView ? "square.grid.2x2" : "list.bullet")
-            }
-            .help(useListView ? "Switch to grid view" : "Switch to list view")
+            // View, cover size and sort are all "how the grid looks", so they
+            // share one menu instead of three toolbar slots.
+            Menu {
+                Picker("Layout", selection: $useListView) {
+                    Label("Grid", systemImage: "square.grid.2x2").tag(false)
+                    Label("List", systemImage: "list.bullet").tag(true)
+                }
+                .pickerStyle(.inline)
 
-            if !useListView {
-                Menu {
-                    ForEach(CoverSize.allCases) { size in
-                        Button {
-                            coverSizeRaw = size.rawValue
-                        } label: {
-                            if coverSizeRaw == size.rawValue {
-                                Label(size.label, systemImage: "checkmark")
-                            } else {
-                                Text(size.label)
-                            }
+                if !useListView {
+                    Picker("Cover size", selection: $coverSizeRaw) {
+                        ForEach(CoverSize.allCases) { size in
+                            Text(size.label).tag(size.rawValue)
                         }
                     }
-                } label: {
-                    Label("Cover size", systemImage: "square.resize")
+                    .pickerStyle(.inline)
                 }
-            }
 
-            Menu {
                 Picker("Sort by", selection: $sortRaw) {
                     ForEach(LibrarySort.allCases) { option in
                         Text(option.rawValue).tag(option.rawValue)
                     }
                 }
+                .pickerStyle(.inline)
             } label: {
-                Label("Sort", systemImage: "arrow.up.arrow.down")
+                Label("View", systemImage: useListView ? "list.bullet" : "square.grid.2x2")
             }
+            .help("Layout, cover size and sort order")
 
             Menu {
                 Button("Rescan All Libraries") {
@@ -1227,13 +1282,30 @@ struct LibraryView: View {
 
                 seriesSection
 
-                sidebarLabel("Insights").padding(.top, 10)
-                statsRow
-                toolsRow
-                notesRow
-                bookmarksRow
-                importsRow
-                indexRow
+                Button {
+                    withAnimation(.easeOut(duration: 0.18)) { showInsights.toggle() }
+                } label: {
+                    HStack(spacing: 4) {
+                        sidebarLabel("Insights")
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(CGTheme.subtext0)
+                            .rotationEffect(.degrees(showInsights ? 90 : 0))
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 10)
+
+                if showInsights {
+                    statsRow
+                    toolsRow
+                    notesRow
+                    bookmarksRow
+                    importsRow
+                    indexRow
+                }
 
                 Spacer(minLength: 20)
             }
@@ -1385,6 +1457,8 @@ struct LibraryView: View {
         let displayName: String
         let items: [LibraryItem]
         let current: String?
+        /// Set when the target is a hand-picked selection rather than a series.
+        var scopeDescription: String? = nil
     }
 
     private var existingPublishers: [String] {
@@ -2264,6 +2338,359 @@ struct LibraryView: View {
         }
     }
 
+    // MARK: - Multi-selection
+    //
+    // Cmd-click toggles, Shift-click extends from the last pick, and a plain
+    // click still opens — unless Select mode is on, in which case a plain click
+    // picks instead. Issue cells and series cards never render in the same
+    // collection, so a selection is only ever one kind at a time.
+
+    private enum ClickIntent { case open, toggle, range }
+
+    private func clickIntent() -> ClickIntent {
+        let flags = NSEvent.modifierFlags
+        if flags.contains(.command) { return .toggle }
+        if flags.contains(.shift) { return .range }
+        return selectionMode ? .toggle : .open
+    }
+
+    private var hasSelection: Bool {
+        !selectedItemIDs.isEmpty || !selectedSeriesNames.isEmpty
+    }
+
+    /// Whichever selection is active, resolved to the issues it covers.
+    /// A series selection is simply every issue in those series.
+    private var selectedItems: [LibraryItem] {
+        if !selectedSeriesNames.isEmpty {
+            return items.filter { selectedSeriesNames.contains($0.seriesKey) }
+        }
+        return items.filter { selectedItemIDs.contains($0.id) }
+    }
+
+    private func clearSelection() {
+        selectedItemIDs.removeAll()
+        selectedSeriesNames.removeAll()
+        itemAnchor = nil
+        seriesAnchor = nil
+    }
+
+    private func handleIssueTap(_ item: LibraryItem, in list: [LibraryItem]) {
+        switch clickIntent() {
+        case .open:
+            clearSelection()
+            keyboardSelection = item.id
+            openAtEnd = false
+            withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+
+        case .toggle:
+            selectedSeriesNames.removeAll()
+            if selectedItemIDs.contains(item.id) {
+                selectedItemIDs.remove(item.id)
+            } else {
+                selectedItemIDs.insert(item.id)
+            }
+            itemAnchor = item.id
+            keyboardSelection = item.id
+
+        case .range:
+            selectedSeriesNames.removeAll()
+            let anchorID = itemAnchor ?? keyboardSelection ?? item.id
+            if let start = list.firstIndex(where: { $0.id == anchorID }),
+               let end = list.firstIndex(where: { $0.id == item.id }) {
+                for index in min(start, end)...max(start, end) {
+                    selectedItemIDs.insert(list[index].id)
+                }
+            } else {
+                selectedItemIDs.insert(item.id)
+            }
+            keyboardSelection = item.id
+        }
+    }
+
+    private func handleSeriesTap(_ series: Series, in list: [Series]) {
+        switch clickIntent() {
+        case .open:
+            clearSelection()
+            withAnimation(.easeInOut(duration: 0.22)) { route = .series(series.name) }
+
+        case .toggle:
+            selectedItemIDs.removeAll()
+            if selectedSeriesNames.contains(series.name) {
+                selectedSeriesNames.remove(series.name)
+            } else {
+                selectedSeriesNames.insert(series.name)
+            }
+            seriesAnchor = series.name
+
+        case .range:
+            selectedItemIDs.removeAll()
+            let anchorName = seriesAnchor ?? series.name
+            if let start = list.firstIndex(where: { $0.name == anchorName }),
+               let end = list.firstIndex(where: { $0.name == series.name }) {
+                for index in min(start, end)...max(start, end) {
+                    selectedSeriesNames.insert(list[index].name)
+                }
+            } else {
+                selectedSeriesNames.insert(series.name)
+            }
+        }
+    }
+
+    private func selectAllVisible() {
+        if !selectedSeriesNames.isEmpty
+            || (!navigableSeries.isEmpty && selectedItemIDs.isEmpty) {
+            selectedItemIDs.removeAll()
+            selectedSeriesNames = Set(navigableSeries.map(\.name))
+        } else {
+            selectedSeriesNames.removeAll()
+            selectedItemIDs = Set(navigableItems.map(\.id))
+        }
+    }
+
+    /// Corner badge that makes membership readable at a glance, and makes
+    /// Select mode discoverable by showing empty circles before you click.
+    /// List rows use the row fill instead — a badge there covers the cover.
+    @ViewBuilder
+    private func selectionBadge(isSelected: Bool) -> some View {
+        if isSelected || selectionMode {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 18))
+                .foregroundStyle(isSelected ? accent : CGTheme.subtext0)
+                .background(Circle().fill(CGTheme.base).padding(2))
+                .padding(6)
+                .transition(.opacity)
+        }
+    }
+
+    private var selectionScopeDescription: String {
+        let count = selectedItems.count
+        if !selectedSeriesNames.isEmpty {
+            let seriesCount = selectedSeriesNames.count
+            return "Applies to \(count) \(count == 1 ? "issue" : "issues") across \(seriesCount) selected \(seriesCount == 1 ? "series" : "series")."
+        }
+        return "Applies to the \(count) selected \(count == 1 ? "issue" : "issues")."
+    }
+
+    private var selectionSummary: String {
+        if !selectedSeriesNames.isEmpty {
+            let seriesCount = selectedSeriesNames.count
+            return "\(seriesCount) \(seriesCount == 1 ? "series" : "series") · \(selectedItems.count) issues"
+        }
+        let count = selectedItemIDs.count
+        return "\(count) \(count == 1 ? "issue" : "issues") selected"
+    }
+
+    /// Floating bar over the grid. Everything here applies to `selectedItems`.
+    private var selectionBar: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(accent)
+
+            Text(selectionSummary)
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(CGTheme.text)
+
+            Divider().frame(height: 16)
+
+            Button("Select All") { selectAllVisible() }
+                .buttonStyle(.plain)
+                .foregroundStyle(CGTheme.subtext1)
+
+            Menu {
+                bulkActions
+            } label: {
+                Label("Actions", systemImage: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(selectedItems.isEmpty)
+
+            Divider().frame(height: 16)
+
+            Button(selectionMode ? "Done" : "Clear") {
+                withAnimation(.easeOut(duration: 0.18)) {
+                    clearSelection()
+                    selectionMode = false
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(CGTheme.subtext1)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassPanel(enabled: glassEnabled, fallback: CGTheme.mantle, cornerRadius: 0)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(accent.opacity(0.5)).frame(height: 1)
+        }
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
+    /// The single-issue context menu, applied to the whole selection.
+    ///
+    /// Toggles become explicit pairs: a mixed selection has no sensible "on"
+    /// state, so "Add to Favorites" and "Remove from Favorites" both appear
+    /// rather than one guessing which way you meant.
+    ///
+    /// Split into pieces because a ViewBuilder tops out at ten children.
+    @ViewBuilder
+    private var bulkActions: some View {
+        let targets = selectedItems
+        bulkGroupingActions(targets)
+        bulkRatingMenu(targets)
+        bulkStatusActions(targets)
+        bulkFlagActions(targets)
+        bulkRunActions(targets)
+        bulkRemovalActions(targets)
+    }
+
+    @ViewBuilder
+    private func bulkGroupingActions(_ targets: [LibraryItem]) -> some View {
+        Button {
+            fieldEdit = SeriesFieldEdit(
+                field: .seriesGroup,
+                displayName: selectionSummary,
+                items: targets,
+                current: agreedValue(targets.map(\.seriesGroupName)),
+                scopeDescription: selectionScopeDescription
+            )
+        } label: {
+            Label("Set Series Group…", systemImage: "square.stack")
+        }
+
+        Button {
+            fieldEdit = SeriesFieldEdit(
+                field: .publisher,
+                displayName: selectionSummary,
+                items: targets,
+                current: agreedValue(targets.map(\.publisherName)),
+                scopeDescription: selectionScopeDescription
+            )
+        } label: {
+            Label("Set Publisher…", systemImage: "building.2")
+        }
+
+        LabelPickerMenu(
+            items: targets,
+            labels: allLabels,
+            onManage: { showLabelManager = true },
+            onChange: { try? context.save() }
+        )
+    }
+
+    @ViewBuilder
+    private func bulkRatingMenu(_ targets: [LibraryItem]) -> some View {
+        Divider()
+
+        Menu("Rating") {
+            ForEach((1...5).reversed(), id: \.self) { stars in
+                Button(String(repeating: "★", count: stars)) {
+                    for item in targets { item.rating = stars }
+                    try? context.save()
+                }
+            }
+            Divider()
+            Button("Clear Rating") {
+                for item in targets { item.rating = 0 }
+                try? context.save()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func bulkStatusActions(_ targets: [LibraryItem]) -> some View {
+        Divider()
+
+        Button {
+            for item in targets { StatusActions.markRead(item, context: context) }
+            try? context.save()
+        } label: {
+            Label("Mark as Read", systemImage: "checkmark.circle")
+        }
+
+        Button {
+            for item in targets { StatusActions.markUnread(item, context: context) }
+            try? context.save()
+        } label: {
+            Label("Mark as Unread", systemImage: "circle")
+        }
+    }
+
+    @ViewBuilder
+    private func bulkFlagActions(_ targets: [LibraryItem]) -> some View {
+        Divider()
+
+        Button {
+            for item in targets { item.isFavorite = true }
+            try? context.save()
+        } label: {
+            Label("Add to Favorites", systemImage: "heart")
+        }
+
+        Button {
+            for item in targets { item.isFavorite = false }
+            try? context.save()
+        } label: {
+            Label("Remove from Favorites", systemImage: "heart.slash")
+        }
+
+        Button {
+            ReadingListActions.addAll(targets, allItems: items)
+            try? context.save()
+        } label: {
+            Label("Add to Reading List", systemImage: "text.badge.plus")
+        }
+
+        Button {
+            ReadingListActions.clear(targets)
+            try? context.save()
+        } label: {
+            Label("Remove from Reading List", systemImage: "text.badge.minus")
+        }
+    }
+
+    @ViewBuilder
+    private func bulkRunActions(_ targets: [LibraryItem]) -> some View {
+        Divider()
+
+        Button {
+            for item in targets {
+                item.isSpecial = true
+                item.isMetadataLocked = true
+            }
+            try? context.save()
+        } label: {
+            Label("Mark as Special", systemImage: "star.square")
+        }
+
+        Button {
+            for item in targets {
+                item.isSpecial = false
+                item.isMetadataLocked = true
+            }
+            try? context.save()
+        } label: {
+            Label("Move to Main Run", systemImage: "arrow.up.doc")
+        }
+    }
+
+    @ViewBuilder
+    private func bulkRemovalActions(_ targets: [LibraryItem]) -> some View {
+        Divider()
+
+        Button {
+            for item in targets { removeFromLibraryOnly(item, context: context) }
+            clearSelection()
+        } label: {
+            Label("Remove from Library", systemImage: "minus.circle")
+        }
+
+        Button(role: .destructive) {
+            showBulkTrashConfirm = true
+        } label: {
+            Label("Move Files to Trash…", systemImage: "trash")
+        }
+    }
+
     // MARK: - Grids
 
     private var columns: [GridItem] {
@@ -2299,18 +2726,32 @@ struct LibraryView: View {
                         )
                     }
                 )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(
+                            selectedSeriesNames.contains(group.name) ? accent : .clear,
+                            lineWidth: 2
+                        )
+                        .padding(-4)
+                }
+                .overlay(alignment: .topLeading) {
+                    selectionBadge(isSelected: selectedSeriesNames.contains(group.name))
+                }
                 .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.22)) {
-                        route = .series(group.name)
-                    }
+                    handleSeriesTap(group, in: groups)
                 }
             }
         }
         .padding()
+        .onAppear { navigableSeries = groups }
+        .onChange(of: groups.map(\.name)) { _, _ in navigableSeries = groups }
+        .onDisappear { navigableSeries = [] }
     }
 
     /// Items currently rendered as an issue grid, for keyboard navigation.
     @State private var navigableItems: [LibraryItem] = []
+    /// Series currently rendered as cards, for Select All and Shift ranges.
+    @State private var navigableSeries: [Series] = []
     @State private var gridColumnCount: Int = 1
 
     private func moveSelection(by delta: Int) {
@@ -2359,6 +2800,11 @@ struct LibraryView: View {
                 openSelection()
                 return nil
             case 53:                                                          // escape
+                if hasSelection || selectionMode {
+                    clearSelection()
+                    selectionMode = false
+                    return nil
+                }
                 guard keyboardSelection != nil else { return event }
                 keyboardSelection = nil
                 return nil
@@ -2382,16 +2828,20 @@ struct LibraryView: View {
                                 .id(item.id)
                                 .background {
                                     RoundedRectangle(cornerRadius: 6)
+                                        .fill(selectedItemIDs.contains(item.id)
+                                              ? accent.opacity(0.16) : .clear)
+                                }
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 6)
                                         .strokeBorder(
-                                            keyboardSelection == item.id ? accent : .clear,
+                                            selectedItemIDs.contains(item.id)
+                                                || keyboardSelection == item.id ? accent : .clear,
                                             lineWidth: 2
                                         )
                                 }
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    keyboardSelection = item.id
-                                    openAtEnd = false
-                                    withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+                                    handleIssueTap(item, in: list)
                                 }
                         }
                     }
@@ -2412,15 +2862,17 @@ struct LibraryView: View {
                                 .overlay {
                                     RoundedRectangle(cornerRadius: 10)
                                         .strokeBorder(
-                                            keyboardSelection == item.id ? accent : .clear,
+                                            selectedItemIDs.contains(item.id)
+                                                || keyboardSelection == item.id ? accent : .clear,
                                             lineWidth: 2
                                         )
                                         .padding(-4)
                                 }
+                                .overlay(alignment: .topLeading) {
+                                    selectionBadge(isSelected: selectedItemIDs.contains(item.id))
+                                }
                                 .onTapGesture {
-                                    keyboardSelection = item.id
-                                    openAtEnd = false
-                                    withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
+                                    handleIssueTap(item, in: list)
                                 }
                         }
                     }

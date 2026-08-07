@@ -51,6 +51,9 @@ struct SeriesGroupSheet: View {
     /// Values already in use, offered as suggestions.
     let existingGroups: [String]
     let currentGroup: String?
+    /// Overrides the "all N issues of X" sentence. Set this when the target is
+    /// a hand-picked selection rather than one whole series.
+    var scopeDescription: String? = nil
 
     var onApply: (String?) -> Void
     var onCancel: () -> Void
@@ -59,6 +62,10 @@ struct SeriesGroupSheet: View {
     @AppStorage(CGAccent.key) private var accentRaw: String = CGAccent.mauve.rawValue
 
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
+
+    private var scopeSentence: String {
+        scopeDescription ?? "Applies to all \(issueCount) issues of \(seriesName)."
+    }
 
     private var trimmed: String {
         draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -80,7 +87,7 @@ struct SeriesGroupSheet: View {
                 Text(field.title)
                     .font(.headline)
                     .foregroundStyle(CGTheme.text)
-                Text("\(field.explanation) Applies to all \(issueCount) issues of \(seriesName).")
+                Text("\(field.explanation) \(scopeSentence)")
                     .font(.caption)
                     .foregroundStyle(CGTheme.subtext0)
                     .fixedSize(horizontal: false, vertical: true)

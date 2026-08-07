@@ -40,6 +40,14 @@ final class BatchConverter {
         task?.cancel()
     }
 
+    /// Wipes the result of the last run. Failures otherwise sit in the list
+    /// forever with no way to acknowledge them.
+    func clearResults() {
+        guard !isRunning else { return }
+        failures = []
+        lastSummary = nil
+    }
+
     func run(_ items: [LibraryItem], context: ModelContext) {
         guard !isRunning else { return }
 

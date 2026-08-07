@@ -116,16 +116,20 @@ struct LibraryItemCell: View {
         .overlay(alignment: .bottom) { badgeStrip }
     }
 
-    /// Single consolidated strip along the bottom of the cover.
+    /// Single strip along the bottom of the cover.
+    ///
+    /// Only things worth noticing appear here. Unread is the default state of
+    /// most of a library, so labelling it put a dark band and a pill on nearly
+    /// every cover in the grid — the badge became the wallpaper. New is genuinely
+    /// news, so it stays; unread is shown by the absence of anything instead.
+    /// The scrim only appears when there is something to make legible.
     @ViewBuilder
     private var badgeStrip: some View {
-        let showsStatus = item.status == .new || item.status == .unread
-        if showsStatus || item.isQueued || item.isFavorite || item.isSpecial {
+        let isNew = item.status == .new
+        if isNew || item.isQueued || item.isFavorite || item.isSpecial {
             HStack(spacing: 6) {
-                if item.status == .new {
+                if isNew {
                     pill("NEW", color: CGTheme.peach)
-                } else if item.status == .unread {
-                    pill("UNREAD", color: CGTheme.lavender)
                 }
                 if item.isSpecial {
                     icon("star.square.fill", color: CGTheme.peach)
@@ -156,7 +160,7 @@ struct LibraryItemCell: View {
             .padding(.vertical, 6)
             .background {
                 LinearGradient(
-                    colors: [.clear, CGTheme.crust.opacity(0.85)],
+                    colors: [.clear, CGTheme.crust.opacity(0.7)],
                     startPoint: .top, endPoint: .bottom
                 )
             }
@@ -174,8 +178,9 @@ struct LibraryItemCell: View {
 
     private func icon(_ symbol: String, color: Color) -> some View {
         Image(systemName: symbol)
-            .font(.system(size: 11))
+            .font(.system(size: 12))
             .foregroundStyle(color)
+            .shadow(color: CGTheme.crust.opacity(0.6), radius: 1, y: 0.5)
     }
 
     private func loadCover() async {

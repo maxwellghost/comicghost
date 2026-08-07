@@ -265,12 +265,23 @@ nonisolated enum MetadataWriter {
 
         // Removing an entry rewrites the whole archive, so only do it when
         // there is actually an old one to drop.
+        var expected = originalCount
         if let existing = archive.first(where: { isComicInfoPath($0.path) }) {
             try archive.remove(existing)
+            expected -= 1
         }
 
-        try add(info, to: archive)
-        try verifyZip(temp, expectedMinimumEntries: originalCount)
+        // Clearing every field removes the metadata rather than leaving an
+        // empty ComicInfo.xml behind.
+        let writesMetadata = !info.isEmpty
+        if writesMetadata {
+            try add(info, to: archive)
+            expected += 1
+        }
+
+        try verifyZip(temp,
+                      expectedMinimumEntries: expected,
+                      requiresMetadata: writesMetadata)
 
         _ = try fm.replaceItemAt(url, withItemAt: temp)
     }
@@ -353,10 +364,16 @@ nonisolated enum MetadataWriter {
             // Pages are already compressed; storing them is faster and no larger.
             try archive.addEntry(with: relative, fileURL: file, compressionMethod: .none)
         }
-        try add(info, to: archive)
+
+        // A file that never carried metadata doesn't gain an empty ComicInfo.xml
+        // just for having been converted.
+        let writesMetadata = !info.isEmpty
+        if writesMetadata { try add(info, to: archive) }
 
         progress?("Verifying")
-        try verifyZip(built, expectedMinimumEntries: imageCount + 1)
+        try verifyZip(built,
+                      expectedMinimumEntries: imageCount + (writesMetadata ? 1 : 0),
+                      requiresMetadata: writesMetadata)
 
         // 4. Pick a destination that can't collide.
         let destination = uniqueDestination(for: url)
@@ -462,9 +479,16 @@ nonisolated enum MetadataWriter {
         return archive.reduce(into: 0) { count, _ in count += 1 }
     }
 
-    /// A rebuilt archive is only accepted if it reopens, still holds everything
-    /// it should, and the metadata just written reads back and parses.
-    private static func verifyZip(_ url: URL, expectedMinimumEntries: Int) throws {
+    /// A rebuilt archive is only accepted if it reopens and still holds
+    /// everything it should. When metadata was written, it also has to read
+    /// back and parse — but a plain format conversion of a file that never had
+    /// any ComicInfo has nothing to round-trip, and demanding one there
+    /// rejected perfectly good rebuilds.
+    private static func verifyZip(
+        _ url: URL,
+        expectedMinimumEntries: Int,
+        requiresMetadata: Bool = true
+    ) throws {
         let archive: Archive
         do {
             archive = try Archive(url: url, accessMode: .read)
@@ -484,6 +508,8 @@ nonisolated enum MetadataWriter {
                 "expected at least \(expectedMinimumEntries) entries, found \(count)"
             )
         }
+
+        guard requiresMetadata else { return }
 
         guard let metadataEntry else {
             throw MetadataWriterError.verificationFailed("metadata missing from the rebuilt file")

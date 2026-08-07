@@ -37,6 +37,10 @@ struct ReaderView: View {
     @AppStorage("readerPersistZoom") private var persistZoom: Bool = true
     @AppStorage("showEndOfIssueCard") private var showEndCard: Bool = true
     @AppStorage("readerZoomLevel") private var storedZoom: Double = 1.0
+    /// Per-series zoom overrides, one line per series: "seriesKey<tab>level"
+    @AppStorage("seriesZoom") private var seriesZoomRaw: String = ""
+    /// Whether the page counter survives Hide Controls at reduced opacity.
+    @AppStorage("showPageCountWhenHidden") private var showCounterWhenHidden: Bool = true
     @AppStorage(ImageAdjustments.brightnessKey) private var adjBrightness: Double = 0
     @AppStorage(ImageAdjustments.contrastKey) private var adjContrast: Double = 1
     @AppStorage(ImageAdjustments.gammaKey) private var adjGamma: Double = 1
@@ -194,6 +198,70 @@ struct ReaderView: View {
     }
     private var isZoomed: Bool { zoom > 1.01 }
 
+    // MARK: - Zoom (per series)
+    //
+    // Mirrors the image adjustments model: a global level everything uses,
+    // plus an optional per-series override that wins when it exists. A
+    // 900-page omnibus scanned at 1200px and a modern digital release rarely
+    // want the same magnification.
+
+    private var seriesZoom: [String: Double] {
+        var result: [String: Double] = [:]
+        for line in seriesZoomRaw.split(separator: "\n") {
+            let parts = line.split(separator: "\t", maxSplits: 1)
+            guard parts.count == 2, let value = Double(parts[1]) else { continue }
+            result[String(parts[0])] = value
+        }
+        return result
+    }
+
+    private var hasSeriesZoom: Bool {
+        seriesZoom[item.seriesKey] != nil
+    }
+
+    /// The level this issue opens at — series override first, global second.
+    private var storedZoomForItem: Double {
+        seriesZoom[item.seriesKey] ?? storedZoom
+    }
+
+    private func writeSeriesZoom(_ all: [String: Double]) {
+        seriesZoomRaw = all
+            .map { key, value in "\(key)\t\(value)" }
+            .sorted()
+            .joined(separator: "\n")
+    }
+
+    private func setSeriesZoom(_ value: Double) {
+        var all = seriesZoom
+        all[item.seriesKey] = value
+        writeSeriesZoom(all)
+    }
+
+    private func clearSeriesZoom() {
+        var all = seriesZoom
+        all.removeValue(forKey: item.seriesKey)
+        writeSeriesZoom(all)
+    }
+
+    /// Turning this on snapshots whatever is on screen into the series slot.
+    private func setUsesSeriesZoom(_ enabled: Bool) {
+        if enabled {
+            setSeriesZoom(Double(zoom))
+        } else {
+            clearSeriesZoom()
+        }
+    }
+
+    /// Writes the current level to wherever it belongs.
+    private func captureZoom(_ value: CGFloat) {
+        guard persistZoom else { return }
+        if hasSeriesZoom {
+            setSeriesZoom(Double(value))
+        } else {
+            storedZoom = Double(value)
+        }
+    }
+
     // MARK: - Manga mode (per series)
 
     private var mangaSeriesSet: Set<String> {
@@ -231,11 +299,12 @@ struct ReaderView: View {
         return !autoHideChrome || chromeVisible || overlayOpen
     }
 
-    /// The page counter is the one piece of chrome that survives Hide Controls.
-    /// Full strength while the rest of the chrome is up, dimmed but legible
-    /// once it goes away.
+    /// The page counter is the one piece of chrome that can survive Hide
+    /// Controls. Full strength while the rest of the chrome is up, then dimmed
+    /// but legible — or gone entirely, if that's what you asked for.
     private var counterOpacity: Double {
-        chromeShown ? 1 : 0.35
+        if chromeShown { return 1 }
+        return showCounterWhenHidden ? 0.35 : 0
     }
 
     var body: some View {
@@ -344,14 +413,14 @@ struct ReaderView: View {
         .onChange(of: zoom) { _, newValue in
             // Pinch, Cmd-scroll and double-click all write through the binding,
             // so persistence is captured here rather than in setZoom.
-            if persistZoom { storedZoom = Double(newValue) }
+            captureZoom(newValue)
         }
         .onChange(of: persistZoom) { _, enabled in
-            if enabled { storedZoom = Double(zoom) } else { setZoom(1.0) }
+            if enabled { captureZoom(zoom) } else { setZoom(1.0) }
         }
         .task {
             if persistZoom {
-                zoom = min(max(CGFloat(storedZoom), minZoom), maxZoom)
+                zoom = min(max(CGFloat(storedZoomForItem), minZoom), maxZoom)
             }
             await load()
             if !hasSeenControls {
@@ -569,6 +638,9 @@ struct ReaderView: View {
             }
     }
 
+    /// Only things with no other home. Thumbnails, hide controls, adjustments
+    /// and the legend all have a button in the top-right row and a key of their
+    /// own, so listing them here again was three ways to do one thing.
     private var navPane: some View {
         VStack(alignment: .leading, spacing: 16) {
             Button { onClose() } label: {
@@ -612,38 +684,7 @@ struct ReaderView: View {
             displayControls
             zoomControls
 
-            Button { showStrip.toggle() } label: {
-                Label("Page thumbnails", systemImage: "rectangle.grid.1x2")
-                    .font(.callout)
-                    .foregroundStyle(CGTheme.subtext1)
-            }
-            .buttonStyle(.plain)
-
             notesSection
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.25)) { hideControls.toggle() }
-            } label: {
-                Label(hideControls ? "Show controls" : "Hide controls",
-                      systemImage: hideControls ? "eye" : "eye.slash")
-                    .font(.callout)
-                    .foregroundStyle(CGTheme.subtext1)
-            }
-            .buttonStyle(.plain)
-
-            Button { showAdjustments.toggle() } label: {
-                Label("Image adjustments", systemImage: "slider.horizontal.3")
-                    .font(.callout)
-                    .foregroundStyle(CGTheme.subtext1)
-            }
-            .buttonStyle(.plain)
-
-            Button { showLegend = true } label: {
-                Label("Controls", systemImage: "questionmark.circle")
-                    .font(.callout)
-                    .foregroundStyle(CGTheme.subtext1)
-            }
-            .buttonStyle(.plain)
 
             if !bookmarks.isEmpty {
                 Divider().overlay(CGTheme.surface1)
@@ -759,61 +800,36 @@ struct ReaderView: View {
     private let minZoom: CGFloat = 1.0
     private let maxZoom: CGFloat = 6.0
 
+    /// Zoom itself lives in the always-visible capsule at the bottom of the
+    /// page. All that's left here is where the level gets remembered, which
+    /// isn't something you reach for mid-page.
     private var zoomControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Zoom \(Int(zoom * 100))%")
-                .font(.caption.monospacedDigit())
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Zoom")
+                .font(.caption)
                 .foregroundStyle(CGTheme.subtext0)
 
-            HStack(spacing: 8) {
-                zoomButton("minus.magnifyingglass") { adjustZoom(by: -zoomStep) }
-                zoomButton("plus.magnifyingglass") { adjustZoom(by: zoomStep) }
-                zoomButton("arrow.counterclockwise") { setZoom(1.0) }
-            }
-
-            // Drag straight to a zoom level instead of stepping there.
-            Slider(
-                value: Binding(
-                    get: { Double(zoom) },
-                    set: { setZoom(CGFloat($0)) }
-                ),
-                in: Double(minZoom)...Double(maxZoom),
-                step: Double(zoomStep)
-            )
-            .controlSize(.small)
-            .tint(accent)
-
-            HStack {
-                Text("\(Int(minZoom * 100))%")
-                Spacer()
-                Text("\(Int(maxZoom * 100))%")
-            }
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(CGTheme.subtext0.opacity(0.7))
-
             Toggle(isOn: $persistZoom) {
-                Text("Keep zoom between pages")
+                Text("Keep between pages")
                     .font(.caption)
                     .foregroundStyle(CGTheme.subtext1)
             }
             .toggleStyle(.checkbox)
             .tint(accent)
-            .padding(.top, 2)
-        }
-    }
 
-    private func zoomButton(_ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.body)
-                .foregroundStyle(CGTheme.text)
-                .frame(width: 30, height: 26)
-                .background {
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(CGTheme.surface0.opacity(glassEnabled ? 0.7 : 1))
-                }
+            Toggle(isOn: Binding(
+                get: { hasSeriesZoom },
+                set: { setUsesSeriesZoom($0) }
+            )) {
+                Text("Save for this series")
+                    .font(.caption)
+                    .foregroundStyle(CGTheme.subtext1)
+            }
+            .toggleStyle(.checkbox)
+            .tint(accent)
+            .disabled(!persistZoom)
+            .opacity(persistZoom ? 1 : 0.45)
         }
-        .buttonStyle(.plain)
     }
 
     private func adjustZoom(by delta: CGFloat) { setZoom(zoom + delta) }
@@ -876,11 +892,17 @@ struct ReaderView: View {
             VStack {
                 Spacer()
                 VStack(spacing: 8) {
-                    zoomScale.opacity(chromeShown ? 1 : 0)
-                    // The counter outlives the rest of the chrome: hiding
-                    // controls shouldn't cost you your place in a 900-page
-                    // omnibus. It just fades back rather than disappearing.
-                    pageCounter.opacity(counterOpacity)
+                    zoomScale
+                        .opacity(chromeShown ? 1 : 0)
+                        .allowsHitTesting(chromeShown)
+                    // By default the counter outlives the rest of the chrome:
+                    // hiding controls shouldn't cost you your place in a
+                    // 900-page omnibus. It fades back rather than
+                    // disappearing — unless the setting says otherwise, in
+                    // which case it must not keep eating clicks at zero.
+                    pageCounter
+                        .opacity(counterOpacity)
+                        .allowsHitTesting(counterOpacity > 0)
                 }
             }
 
@@ -1016,9 +1038,6 @@ struct ReaderView: View {
                 Text(counterText).font(.callout.monospacedDigit())
                 if let chapterProgressLabel {
                     Text("· \(chapterProgressLabel)").font(.caption)
-                }
-                if isZoomed {
-                    Text("· \(Int(zoom * 100))%").font(.caption.monospacedDigit())
                 }
             }
             .foregroundStyle(CGTheme.subtext1)

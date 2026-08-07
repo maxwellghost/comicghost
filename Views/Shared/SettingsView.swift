@@ -11,8 +11,10 @@ struct SettingsView: View {
     @AppStorage("autoHideChrome") private var autoHideChrome: Bool = true
     @AppStorage("alwaysShowEdges") private var alwaysShowEdges: Bool = false
     @AppStorage("hideReaderControls") private var hideReaderControls: Bool = false
+    @AppStorage("showPageCountWhenHidden") private var showPageCountWhenHidden: Bool = true
     @AppStorage("preventSleepWhileReading") private var preventSleep: Bool = true
     @AppStorage(SpotlightIndex.enabledKey) private var spotlightEnabled: Bool = true
+    @AppStorage("showEndOfIssueCard") private var showEndCard: Bool = true
     @AppStorage(CGAccent.key) private var accentRaw: String = CGAccent.mauve.rawValue
     @AppStorage(CGThemeCatalog.key) private var themeID: String = "mocha"
 
@@ -21,8 +23,17 @@ struct SettingsView: View {
     @State private var backupMessage: String?
     @State private var libraryMessage: String?
     @State private var expandedThemeFamilies: Set<String> = []
+    /// The whole theme list folds away — the label shows what's active, which
+    /// is the only part worth seeing once you've picked one.
+    @State private var showThemes = false
 
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
+
+    /// Read through the stored id rather than the catalog's own lookup, so the
+    /// collapsed label redraws the moment a theme is picked.
+    private var activeTheme: CGThemeDefinition {
+        CGThemeCatalog.all.first { $0.id == themeID } ?? CGThemeCatalog.current
+    }
 
     var body: some View {
         Form {
@@ -67,14 +78,25 @@ struct SettingsView: View {
             }
 
             Section("Theme") {
-                VStack(alignment: .leading, spacing: 6) {
-                    // The active theme's family opens by default; the rest stay
-                    // folded so 21 themes don't fill the window.
-                    ForEach(CGThemeCatalog.families, id: \.self) { family in
-                        themeFamilyRow(family)
+                DisclosureGroup(isExpanded: $showThemes) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        // The active theme's family opens by default; the rest stay
+                        // folded so 21 themes don't fill the window.
+                        ForEach(CGThemeCatalog.families, id: \.self) { family in
+                            themeFamilyRow(family)
+                        }
+                    }
+                    .padding(.top, 6)
+                } label: {
+                    HStack {
+                        Text(activeTheme.name)
+                            .foregroundStyle(CGTheme.text)
+                        Text(activeTheme.family)
+                            .font(.caption)
+                            .foregroundStyle(CGTheme.subtext0)
                     }
                 }
-                .padding(.vertical, 4)
+                .tint(accent)
             }
 
             Section("Appearance") {
@@ -115,18 +137,7 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Behavior") {
-                Toggle(isOn: $restoreState) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Remember where I was")
-                        Text("Reopen to the section and series you were last browsing.")
-                            .font(.caption)
-                            .foregroundStyle(CGTheme.subtext0)
-                    }
-                }
-                .toggleStyle(.switch)
-                .tint(accent)
-
+            Section("Reader") {
                 Toggle(isOn: $autoHideChrome) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Auto-hide reader controls")
@@ -142,6 +153,53 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Hide reader controls")
                         Text("Keep the page counter and buttons off the page entirely. Toggle with H while reading.")
+                            .font(.caption)
+                            .foregroundStyle(CGTheme.subtext0)
+                    }
+                }
+                .toggleStyle(.switch)
+                .tint(accent)
+
+                Toggle(isOn: $showPageCountWhenHidden) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show page count when controls are hidden")
+                        Text("Keeps a dimmed page counter on screen once the rest of the chrome goes away. Off means a completely bare page.")
+                            .font(.caption)
+                            .foregroundStyle(CGTheme.subtext0)
+                    }
+                }
+                .toggleStyle(.switch)
+                .tint(accent)
+                .disabled(!hideReaderControls && !autoHideChrome)
+
+                Toggle(isOn: $alwaysShowEdges) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Always show page-turn arrows")
+                        Text("Keep the left and right chevrons faintly visible instead of only on hover.")
+                            .font(.caption)
+                            .foregroundStyle(CGTheme.subtext0)
+                    }
+                }
+                .toggleStyle(.switch)
+                .tint(accent)
+
+                Toggle(isOn: $showEndCard) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("End-of-issue card")
+                        Text("Show series progress and the next issue when you reach the end of one.")
+                            .font(.caption)
+                            .foregroundStyle(CGTheme.subtext0)
+                    }
+                }
+                .toggleStyle(.switch)
+                .tint(accent)
+            }
+
+            Section("System") {
+                Toggle(isOn: $restoreState) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Remember where I was")
+                        Text("Reopen to the section and series you were last browsing.")
                             .font(.caption)
                             .foregroundStyle(CGTheme.subtext0)
                     }
@@ -167,17 +225,6 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Keep the display awake while reading")
                         Text("Stops the screen dimming mid-page.")
-                            .font(.caption)
-                            .foregroundStyle(CGTheme.subtext0)
-                    }
-                }
-                .toggleStyle(.switch)
-                .tint(accent)
-
-                Toggle(isOn: $alwaysShowEdges) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Always show page-turn arrows")
-                        Text("Keep the left and right chevrons faintly visible instead of only on hover.")
                             .font(.caption)
                             .foregroundStyle(CGTheme.subtext0)
                     }
