@@ -2,3 +2,6 @@
 *.app
 *.zip
 xcuserdata/
+
+# Operating manual, kept local on purpose. Never committed.
+CLAUDE.md
