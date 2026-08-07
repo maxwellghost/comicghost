@@ -24,6 +24,8 @@ struct SettingsView: View {
     @State private var backupMessage: String?
     @State private var libraryMessage: String?
     @State private var removalProgress: Double?
+    @AppStorage(UpdateChecker.enabledKey) private var checkForUpdates: Bool = false
+    private let updates = UpdateChecker.shared
     @State private var expandedThemeFamilies: Set<String> = []
     /// The whole theme list folds away — the label shows what's active, which
     /// is the only part worth seeing once you've picked one.
@@ -116,6 +118,48 @@ struct SettingsView: View {
                     Text(libraryMessage)
                         .font(.caption)
                         .foregroundStyle(CGTheme.subtext0)
+                }
+            }
+
+            Section("Updates") {
+                Toggle(isOn: $checkForUpdates) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Check for new versions")
+                        Text("Asks GitHub once a day whether a newer release exists, and shows a badge in the title bar if one does. This is the only time Comic Ghost uses the network. Nothing about your library is sent, and nothing downloads or installs on its own.")
+                            .font(.caption)
+                            .foregroundStyle(CGTheme.subtext0)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+                .tint(accent)
+                .onChange(of: checkForUpdates) { _, isOn in
+                    // Turning it on should answer the question immediately
+                    // rather than waiting for tomorrow's launch.
+                    if isOn {
+                        Task { await updates.check() }
+                    } else {
+                        updates.forget()
+                    }
+                }
+
+                HStack {
+                    Text("Version \(updates.currentVersion)")
+                        .foregroundStyle(CGTheme.subtext0)
+                    Spacer()
+                    if updates.isChecking {
+                        Text("Checking…")
+                            .font(.caption)
+                            .foregroundStyle(CGTheme.subtext0)
+                    } else if let latest = updates.availableVersion {
+                        Button("Get \(latest)") {
+                            NSWorkspace.shared.open(updates.releasesPage)
+                        }
+                    } else {
+                        Button("Check Now") {
+                            Task { await updates.check() }
+                        }
+                    }
                 }
             }
 

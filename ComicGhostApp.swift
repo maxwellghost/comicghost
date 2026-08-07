@@ -19,6 +19,7 @@ struct ComicGhostApp: App {
                 .preferredColorScheme(theme.isDark ? .dark : .light)
                 .background(CGTheme.base)
                 .tint(CGTheme.accent)
+                .task { await UpdateChecker.shared.checkIfDue() }
         }
         .modelContainer(ModelContainerSetup.shared)
         .windowStyle(.automatic)

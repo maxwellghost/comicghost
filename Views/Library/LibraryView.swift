@@ -104,6 +104,7 @@ struct GlassBackdrop: View {
 
 struct LibraryView: View {
     @Environment(\.modelContext) private var context
+    private let updates = UpdateChecker.shared
     @Query(sort: \LibraryItem.dateAdded, order: .reverse) private var allItems: [LibraryItem]
     /// Libraries hidden from view, stored as ids one per line. Kept as a
     /// preference rather than a field on the library so nothing about the
@@ -721,8 +722,22 @@ struct LibraryView: View {
 
             SettingsLink {
                 Label("Settings", systemImage: "gearshape")
+                    // A dot on the cog, the way an unread count sits on an app
+                    // icon. Points at where the detail lives without spending a
+                    // toolbar slot or explaining itself in the title bar.
+                    .overlay(alignment: .topTrailing) {
+                        if updates.availableVersion != nil {
+                            Circle()
+                                .fill(CGTheme.accent)
+                                .frame(width: 6, height: 6)
+                                .offset(x: 3, y: -2)
+                        }
+                    }
             }
-            .help("Settings (⌘,)")
+            .help(
+                updates.availableVersion.map { "Version \($0) is available. Settings (⌘,)" }
+                    ?? "Settings (⌘,)"
+            )
 
             // View, cover size and sort are all "how the grid looks", so they
             // share one menu instead of three toolbar slots.

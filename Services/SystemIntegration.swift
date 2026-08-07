@@ -194,3 +194,101 @@ enum DropImport {
         return item
     }
 }
+
+/// Checks GitHub Releases for a newer version.
+///
+/// This is the app's only outbound connection, and it stays off until switched
+/// on in Settings. Nothing about the library is ever sent — the request is an
+/// anonymous GET, and the only thing GitHub learns is an IP and a timestamp.
+@MainActor
+@Observable
+final class UpdateChecker {
+    static let shared = UpdateChecker()
+
+    @ObservationIgnored static let enabledKey = "checkForUpdates"
+    @ObservationIgnored private static let lastCheckKey = "lastUpdateCheckDate"
+    @ObservationIgnored private static let latestSeenKey = "lastSeenReleaseVersion"
+
+    private init() {
+        restoreBadge()
+    }
+
+    /// The throttle is written to disk but the result was not, so after the
+    /// first check of the day every later launch found nothing to show and
+    /// refused to look again — the badge vanished for a day at a time. The last
+    /// version seen is remembered and re-checked against this build at launch.
+    func restoreBadge() {
+        guard UserDefaults.standard.bool(forKey: Self.enabledKey),
+              let seen = UserDefaults.standard.string(forKey: Self.latestSeenKey),
+              Self.isNewer(seen, than: currentVersion)
+        else {
+            availableVersion = nil
+            return
+        }
+        availableVersion = seen
+    }
+
+    /// Switching the setting off clears the badge without waiting for a launch.
+    func forget() {
+        availableVersion = nil
+    }
+
+    /// Set when a release newer than this build exists. Drives the title bar badge.
+    private(set) var availableVersion: String?
+    private(set) var isChecking = false
+
+    private let api = URL(string: "https://api.github.com/repos/maxwellghost/comicghost/releases/latest")!
+
+    /// Where the badge sends you. Opening a page needs no entitlement.
+    let releasesPage = URL(string: "https://github.com/maxwellghost/comicghost/releases/latest")!
+
+    var currentVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+    }
+
+    /// Launch path. Does nothing unless enabled, and at most once a day.
+    func checkIfDue() async {
+        guard UserDefaults.standard.bool(forKey: Self.enabledKey) else { return }
+        if let last = UserDefaults.standard.object(forKey: Self.lastCheckKey) as? Date,
+           Date.now.timeIntervalSince(last) < 60 * 60 * 24 {
+            return
+        }
+        await check()
+    }
+
+    /// Offline is this app's normal state, so a failure here is silent by design.
+    func check() async {
+        guard !isChecking else { return }
+        isChecking = true
+        defer { isChecking = false }
+
+        var request = URLRequest(url: api)
+        request.timeoutInterval = 15
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tag = json["tag_name"] as? String
+        else { return }
+
+        UserDefaults.standard.set(Date.now, forKey: Self.lastCheckKey)
+
+        let latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+        UserDefaults.standard.set(latest, forKey: Self.latestSeenKey)
+        availableVersion = Self.isNewer(latest, than: currentVersion) ? latest : nil
+    }
+
+    /// Compares version numbers a field at a time. String comparison would put
+    /// 1.1.10 before 1.1.9, which only starts mattering after ten patches.
+    nonisolated static func isNewer(_ candidate: String, than current: String) -> Bool {
+        let new = candidate.split(separator: ".").map { Int($0) ?? 0 }
+        let old = current.split(separator: ".").map { Int($0) ?? 0 }
+        for index in 0..<max(new.count, old.count) {
+            let a = index < new.count ? new[index] : 0
+            let b = index < old.count ? old[index] : 0
+            if a != b { return a > b }
+        }
+        return false
+    }
+}
