@@ -4,6 +4,8 @@ A native macOS comic reader for local collections. Swift and SwiftUI, no server,
 
 Point it at a folder and it handles the rest — series grouping, cover art, reading progress, and a reader built for actually reading rather than clicking around.
 
+**[User manual](MANUAL.md)** · **[Download](https://github.com/maxwellghost/ComicGhost/releases/latest)**
+
 ---
 
 ## Features
@@ -123,6 +125,21 @@ Open Settings (⌘, or the gear in the toolbar), add a library folder, then hit 
 - Folder access persists across launches via security-scoped bookmarks. If you move a library folder, re-pick it in Settings.
 - PDFs render their pages on first open and cache the result, so a long PDF takes longer to open the first time than an equivalent CBZ.
 
-## Maybe someday
+## Acknowledgements
 
-Per-issue and general notes, a pull list for comics you don't own yet, a metadata editor that writes ComicInfo.xml, loose image folder support, a Quick Look preview extension, an umbrella-folder rework, and working keyboard navigation in the library grid.
+Comic Ghost bundles the `unrar` command-line utility, copyright Alexander
+Roshal, used under the UnRAR license — see `unrar/license.txt`. It is used
+only to extract RAR archives. Per that license, the UnRAR code may not be
+used to develop a RAR-compatible archiver or to re-create the RAR
+compression algorithm, and Comic Ghost does neither.
+
+CBZ support uses [ZIPFoundation](https://github.com/weichsel/ZIPFoundation)
+by Thomas Zoechling, MIT licensed — see `ZIPFoundation-0.9.20/LICENSE`.
+
+### A note on licensing
+
+Comic Ghost's own source is GPL-3.0. The bundled `unrar` binary is not
+covered by it — it's a separate program under RARLAB's own license, which
+is not GPL-compatible, invoked as an external process rather than linked
+into the app. It's included for convenience; see `UNRAR-LICENSE.txt` for
+its terms.
