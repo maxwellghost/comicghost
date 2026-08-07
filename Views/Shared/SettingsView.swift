@@ -23,6 +23,7 @@ struct SettingsView: View {
     @State private var newName = ""
     @State private var backupMessage: String?
     @State private var libraryMessage: String?
+    @State private var removalProgress: Double?
     @State private var expandedThemeFamilies: Set<String> = []
     /// The whole theme list folds away — the label shows what's active, which
     /// is the only part worth seeing once you've picked one.
@@ -94,9 +95,17 @@ struct SettingsView: View {
                     }
                     .opacity(isHidden ? 0.55 : 1)
                     .padding(.vertical, 2)
+                    .disabled(removalProgress != nil)
                 }
 
                 Button("Add Library…") { addLibrary() }
+                    .disabled(removalProgress != nil)
+
+                if let removalProgress {
+                    ProgressView(value: removalProgress)
+                        .progressViewStyle(.linear)
+                        .tint(accent)
+                }
 
                 Text("Hiding a library leaves everything in place — the folder, the files, and all your reading progress, ratings, and labels. It just stops appearing anywhere in the app until you show it again.")
                     .font(.caption)
@@ -558,43 +567,104 @@ struct SettingsView: View {
 
     /// Removing a library drops its items from the app. Files are untouched.
     private func remove(_ library: ComicLibrary) {
+        guard removalProgress == nil else { return }
+
         // Capture what's needed before anything is deleted. Reading a property
         // off `library` after context.delete invalidates the object, and SwiftUI
         // will happily render this row once more before the query catches up.
         let targetID = library.id
+        let name = library.name
 
-        let all = ((try? context.fetch(FetchDescriptor<LibraryItem>())) ?? [])
-        let doomed = all.filter { $0.libraryID == targetID }
-        let doomedIDs = Set(doomed.map(\.id))
+        setHidden(false, for: library)
+        removalProgress = 0
+        libraryMessage = "Removing \(name)…"
+
+        Task { @MainActor in
+            // Hand the run loop one turn so the progress row paints before the
+            // store work takes the actor back.
+            await Task.yield()
+
+            let orphanedIDs = deleteFromStore(libraryID: targetID)
+            await purgeThumbnails(orphanedIDs)
+
+            removalProgress = nil
+            libraryMessage = "Removed \(name)."
+            try? await Task.sleep(for: .seconds(3))
+            libraryMessage = nil
+        }
+    }
+
+    /// The whole store side in one go, deliberately without a suspension point.
+    /// Yielding partway would let SwiftUI render a LibraryItem that has been
+    /// deleted but not yet saved, and reading an invalidated model is fatal.
+    /// Returns the ids whose cached thumbnails are now orphaned.
+    @MainActor
+    private func deleteFromStore(libraryID targetID: UUID) -> [UUID] {
+        // Filter in the query, not in Swift. Fetching the whole table and
+        // discarding most of it materialises the entire library to delete part
+        // of it, which is fine at a hundred comics and ruinous at a hundred
+        // thousand.
+        let doomed = ((try? context.fetch(
+            FetchDescriptor<LibraryItem>(
+                predicate: #Predicate { $0.libraryID == targetID }
+            )
+        )) ?? [])
+        let doomedIDs = doomed.map(\.id)
+        let doomedSet = Set(doomedIDs)
 
         // Bookmarks point at comics by id with no relationship behind them, so
-        // nothing removes them automatically.
+        // nothing removes them automatically. Matching against the doomed set
+        // in Swift beats a predicate here — an IN clause holding every deleted
+        // id would be worse than scanning what is normally a small table.
         let bookmarks = ((try? context.fetch(FetchDescriptor<Bookmark>())) ?? [])
-        for bookmark in bookmarks where doomedIDs.contains(bookmark.itemID) {
+        for bookmark in bookmarks where doomedSet.contains(bookmark.itemID) {
             context.delete(bookmark)
         }
 
         // Reading progress cascades off LibraryItem, so saving snapshots every
         // progress row the deletes drag in. A row that was never read is still
         // a fault — SwiftData calls that backing a future and traps on it
-        // rather than snapshotting it. One fetch pulls them all in up front,
-        // then touching each relationship resolves to the loaded instance
-        // instead of firing 1400 separate faults.
-        _ = (try? context.fetch(FetchDescriptor<ReadingProgress>())) ?? []
+        // rather than snapshotting it, which is what crashed every removal
+        // before. Touching the relationship loads it. Only the doomed items'
+        // rows are needed, so this stays proportional to what is being removed.
         for item in doomed {
             _ = item.progress?.currentPage
-        }
-
-        for item in doomed {
             context.delete(item)
         }
 
-        for id in doomedIDs {
-            try? FileManager.default.removeItem(at: ThumbnailGenerator.cachedPath(for: id))
+        var descriptor = FetchDescriptor<ComicLibrary>(
+            predicate: #Predicate { $0.id == targetID }
+        )
+        descriptor.fetchLimit = 1
+        if let library = (try? context.fetch(descriptor))?.first {
+            context.delete(library)
         }
-
-        setHidden(false, for: library)
-        context.delete(library)
         try? context.save()
+
+        return doomedIDs
+    }
+
+    /// Thumbnail files are plain filesystem work with no model involved, so this
+    /// runs off the main actor. Awaiting each batch lets the window redraw, which
+    /// is what actually keeps the bar moving. Runs after the save, so a failed
+    /// save leaves the thumbnails intact.
+    @MainActor
+    private func purgeThumbnails(_ ids: [UUID]) async {
+        guard !ids.isEmpty else { return }
+        let batchSize = 100
+        var done = 0
+
+        for start in stride(from: 0, to: ids.count, by: batchSize) {
+            let batch = Array(ids[start..<min(start + batchSize, ids.count)])
+            await Task.detached(priority: .utility) {
+                for id in batch {
+                    try? FileManager.default.removeItem(
+                        at: ThumbnailGenerator.cachedPath(for: id)
+                    )
+                }
+            }.value
+            done += batch.count
+            removalProgress = Double(done) / Double(ids.count)
+        }
     }
 }
