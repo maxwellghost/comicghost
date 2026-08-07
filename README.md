@@ -2,6 +2,8 @@
 
 A native macOS comic reader for local collections. Swift and SwiftUI, no server, no account, no cloud.
 
+Your library never leaves your machine. The one thing that can reach the internet is an optional update check, off until you turn it on — see [Privacy and the network](#privacy-and-the-network).
+
 Point it at a folder and it handles the rest — series grouping, cover art, reading progress, and a reader built for actually reading rather than clicking around.
 
 **[User manual](MANUAL.md)** · **[Download](https://github.com/maxwellghost/ComicGhost/releases/latest)**
@@ -116,6 +118,43 @@ To make Comic Ghost the default handler for `.cbz` and `.cbr`, see
 ### First run
 
 Open Settings (⌘, or the gear in the toolbar), add a library folder, then hit rescan. Large collections import in parallel with a progress banner.
+
+---
+
+## Privacy and the network
+
+Comic Ghost is a local reader. It has no server, no account, no sync, and no
+telemetry. Your comics, reading progress, notes, bookmarks, ratings and labels
+live on your machine and are never uploaded anywhere. There is no analytics, no
+crash reporting, and no phone-home.
+
+There is exactly one thing in the app that can open a network connection, and it
+is off until you switch it on:
+
+**Update check.** Enable it in Settings and Comic Ghost asks GitHub, at most once
+a day, whether a release newer than your build exists. If one does, a dot appears
+on the Settings cog and Settings offers a button that opens the release page in
+your browser.
+
+What that request involves:
+
+- It is an anonymous HTTPS GET to the public GitHub releases API for this repo.
+- It sends nothing about you or your library — no identifiers, no file names, no
+  counts, no usage data. The request body is empty and carries no cookies.
+- GitHub, like any web server, sees an IP address and a timestamp. That is the
+  entire privacy cost, and it is why the feature is opt-in rather than on by
+  default.
+- Failures are silent. Offline is a normal state for this app, not an error.
+
+**Nothing downloads or installs by itself.** The button opens a page in your
+browser; you download and install by hand, exactly as you did the first time.
+Automatic updating is deliberately not offered: the app is ad-hoc signed rather
+than notarized, so anything downloaded is quarantined by macOS, and making silent
+updates work would mean the app stripping that protection off a binary it just
+fetched from the internet. Doing it properly would require Developer ID signing
+and notarization, which this project does not use.
+
+If you never enable the setting, Comic Ghost makes no network connections at all.
 
 ---
 
