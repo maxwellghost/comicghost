@@ -300,11 +300,11 @@ struct ReaderView: View {
     }
 
     /// The page counter is the one piece of chrome that can survive Hide
-    /// Controls. Full strength while the rest of the chrome is up, then dimmed
-    /// but legible — or gone entirely, if that's what you asked for.
+    /// Controls. Full strength while the rest of the chrome is up, then faded
+    /// but still readable — or gone entirely, if that's what you asked for.
     private var counterOpacity: Double {
         if chromeShown { return 1 }
-        return showCounterWhenHidden ? 0.35 : 0
+        return showCounterWhenHidden ? 0.7 : 0
     }
 
     var body: some View {
@@ -392,6 +392,9 @@ struct ReaderView: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: coverStatus)
+        // Without this the titlebar falls back to the bundle name, which reads
+        // "ComicGhost" while the library reads "Comic Ghost".
+        .navigationTitle(item.title)
         .background {
             if glassEnabled {
                 GlassBackdrop(imagePath: currentPagePath, tint: CGTheme.crust, blur: 70, artOpacity: 0.5)
@@ -1040,16 +1043,20 @@ struct ReaderView: View {
                     Text("· \(chapterProgressLabel)").font(.caption)
                 }
             }
-            .foregroundStyle(CGTheme.subtext1)
+            // Dimmed, this sits over whatever the page happens to be. Frosted
+            // material and low-contrast text both vanish against a white manga
+            // page, so the faded state uses a solid dark capsule instead.
+            .foregroundStyle(chromeShown ? CGTheme.subtext1 : CGTheme.text)
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
             .background {
-                if glassEnabled {
+                if chromeShown, glassEnabled {
                     Capsule().fill(.ultraThinMaterial)
                 } else {
-                    Capsule().fill(CGTheme.base.opacity(0.85))
+                    Capsule().fill(CGTheme.crust.opacity(chromeShown ? 0.85 : 0.95))
                 }
             }
+            .shadow(color: .black.opacity(chromeShown ? 0 : 0.35), radius: 3, y: 1)
         }
         .buttonStyle(.plain)
         .help("Jump to page (G)")

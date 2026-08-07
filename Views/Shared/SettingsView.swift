@@ -15,6 +15,7 @@ struct SettingsView: View {
     @AppStorage("preventSleepWhileReading") private var preventSleep: Bool = true
     @AppStorage(SpotlightIndex.enabledKey) private var spotlightEnabled: Bool = true
     @AppStorage("showEndOfIssueCard") private var showEndCard: Bool = true
+    @AppStorage("hiddenLibraryIDs") private var hiddenLibraryIDsRaw: String = ""
     @AppStorage(CGAccent.key) private var accentRaw: String = CGAccent.mauve.rawValue
     @AppStorage(CGThemeCatalog.key) private var themeID: String = "mocha"
 
@@ -28,6 +29,18 @@ struct SettingsView: View {
     @State private var showThemes = false
 
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
+
+    private var hiddenLibraryIDs: Set<UUID> {
+        Set(hiddenLibraryIDsRaw.split(separator: "\n").compactMap { UUID(uuidString: String($0)) })
+    }
+
+    /// Hiding is a view preference, so nothing is written to the library itself
+    /// and nothing about the folder or its comics changes.
+    private func setHidden(_ hidden: Bool, for library: ComicLibrary) {
+        var ids = hiddenLibraryIDs
+        if hidden { ids.insert(library.id) } else { ids.remove(library.id) }
+        hiddenLibraryIDsRaw = ids.map(\.uuidString).sorted().joined(separator: "\n")
+    }
 
     /// Read through the stored id rather than the catalog's own lookup, so the
     /// collapsed label redraws the moment a theme is picked.
@@ -44,12 +57,23 @@ struct SettingsView: View {
                 }
 
                 ForEach(libraries) { library in
+                    let isHidden = hiddenLibraryIDs.contains(library.id)
                     HStack(spacing: 10) {
-                        Image(systemName: "folder")
-                            .foregroundStyle(accent)
+                        Image(systemName: isHidden ? "eye.slash" : "folder")
+                            .foregroundStyle(isHidden ? CGTheme.subtext0 : accent)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(library.name)
-                                .foregroundStyle(CGTheme.text)
+                            HStack(spacing: 6) {
+                                Text(library.name)
+                                    .foregroundStyle(CGTheme.text)
+                                if isHidden {
+                                    Text("HIDDEN")
+                                        .font(.system(size: 9, weight: .semibold))
+                                        .foregroundStyle(CGTheme.crust)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1)
+                                        .background(CGTheme.subtext0, in: Capsule())
+                                }
+                            }
                             Text(library.path)
                                 .font(.caption)
                                 .foregroundStyle(CGTheme.subtext0)
@@ -57,6 +81,9 @@ struct SettingsView: View {
                                 .lineLimit(1)
                         }
                         Spacer()
+                        Button(isHidden ? "Show" : "Hide") {
+                            setHidden(!isHidden, for: library)
+                        }
                         Button("Rename") {
                             newName = library.name
                             renaming = library
@@ -65,10 +92,16 @@ struct SettingsView: View {
                             remove(library)
                         }
                     }
+                    .opacity(isHidden ? 0.55 : 1)
                     .padding(.vertical, 2)
                 }
 
                 Button("Add Library…") { addLibrary() }
+
+                Text("Hiding a library leaves everything in place — the folder, the files, and all your reading progress, ratings, and labels. It just stops appearing anywhere in the app until you show it again.")
+                    .font(.caption)
+                    .foregroundStyle(CGTheme.subtext0)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 if let libraryMessage {
                     Text(libraryMessage)
@@ -531,6 +564,8 @@ struct SettingsView: View {
             if let progress = item.progress { context.delete(progress) }
             context.delete(item)
         }
+        // Don't leave a hidden-flag behind for an id that no longer exists.
+        setHidden(false, for: library)
         context.delete(library)
         try? context.save()
     }

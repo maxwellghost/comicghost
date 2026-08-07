@@ -104,7 +104,12 @@ struct GlassBackdrop: View {
 
 struct LibraryView: View {
     @Environment(\.modelContext) private var context
-    @Query(sort: \LibraryItem.dateAdded, order: .reverse) private var items: [LibraryItem]
+    @Query(sort: \LibraryItem.dateAdded, order: .reverse) private var allItems: [LibraryItem]
+    /// Libraries hidden from view, stored as ids one per line. Kept as a
+    /// preference rather than a field on the library so nothing about the
+    /// stored data changes — hiding is a view state, not a property of the
+    /// folder.
+    @AppStorage("hiddenLibraryIDs") private var hiddenLibraryIDsRaw: String = ""
     @Query(sort: \SmartCollection.sortIndex) private var collections: [SmartCollection]
     @Query(sort: \ComicLibrary.sortIndex) private var libraries: [ComicLibrary]
     @Query(sort: \ComicLabel.sortIndex) private var allLabels: [ComicLabel]
@@ -168,6 +173,32 @@ struct LibraryView: View {
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
     private var sort: LibrarySort { LibrarySort(rawValue: sortRaw) ?? .title }
     private var coverSize: CoverSize { CoverSize(rawValue: coverSizeRaw) ?? .medium }
+
+    // MARK: - Hidden libraries
+
+    private var hiddenLibraryIDs: Set<UUID> {
+        Set(hiddenLibraryIDsRaw.split(separator: "\n").compactMap { UUID(uuidString: String($0)) })
+    }
+
+    /// Libraries you can actually see, in sidebar order.
+    private var visibleLibraries: [ComicLibrary] {
+        let hidden = hiddenLibraryIDs
+        return libraries.filter { !hidden.contains($0.id) }
+    }
+
+    /// Everything except comics belonging to a hidden library.
+    ///
+    /// The whole view reads from this rather than the raw query, so hiding a
+    /// library empties it out of the grid, the sidebar tree, every count,
+    /// search, stats, tools, the dock badge, and Spotlight in one move.
+    private var items: [LibraryItem] {
+        let hidden = hiddenLibraryIDs
+        guard !hidden.isEmpty else { return allItems }
+        return allItems.filter { item in
+            guard let id = item.libraryID else { return true }
+            return !hidden.contains(id)
+        }
+    }
 
     private var activeFilter: LibraryFilter {
         if case .filter(let f) = route { return f }
@@ -596,6 +627,14 @@ struct LibraryView: View {
             }
             .onChange(of: route) { _, _ in clearSelection() }
             .onChange(of: searchQuery) { _, _ in clearSelection() }
+            // Hiding the library you were browsing would otherwise leave you
+            // staring at an empty grid with no way to tell why.
+            .onChange(of: hiddenLibraryIDsRaw) { _, _ in
+                if let id = selectedLibraryID, hiddenLibraryIDs.contains(id) {
+                    selectedLibraryID = nil
+                }
+                clearSelection()
+            }
             .confirmationDialog(
                 "Move \(selectedItems.count) \(selectedItems.count == 1 ? "file" : "files") to the Trash?",
                 isPresented: $showBulkTrashConfirm,
@@ -1228,10 +1267,10 @@ struct LibraryView: View {
     private var sidebar: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
-                if libraries.count > 1 {
+                if visibleLibraries.count > 1 {
                     sidebarLabel("Libraries")
                     libraryRow(nil, name: "All Libraries", count: items.count)
-                    ForEach(libraries) { library in
+                    ForEach(visibleLibraries) { library in
                         libraryRow(
                             library.id,
                             name: library.name,
