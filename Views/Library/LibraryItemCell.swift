@@ -184,14 +184,37 @@ struct LibraryItemCell: View {
     }
 
     private func loadCover() async {
-        guard let path = item.coverThumbnailPath else {
+        // Fast path: the thumbnail is where we left it.
+        if let path = item.coverThumbnailPath,
+           FileManager.default.fileExists(atPath: path) {
+            cover = await Task.detached(priority: .userInitiated) {
+                NSImage(contentsOfFile: path)
+            }.value
             didAttemptLoad = true
             return
         }
-        let image = await Task.detached(priority: .userInitiated) {
-            NSImage(contentsOfFile: path)
+
+        // Thumbnails live in ~/Library/Caches, which macOS and every cleanup
+        // utility are free to empty. Rescanning won't bring them back, because
+        // the comic is already in the library and gets skipped, so the cover
+        // would stay blank forever. Rebuild it here instead.
+        let id = item.id
+        let archivePath = item.filePath
+        guard FileManager.default.fileExists(atPath: archivePath) else {
+            didAttemptLoad = true
+            return
+        }
+
+        let rebuilt = await Task.detached(priority: .utility) { () -> (String, NSImage)? in
+            guard let url = try? ThumbnailGenerator.thumbnail(for: id, archivePath: archivePath),
+                  let image = NSImage(contentsOfFile: url.path) else { return nil }
+            return (url.path, image)
         }.value
-        cover = image
+
+        if let rebuilt {
+            item.coverThumbnailPath = rebuilt.0
+            cover = rebuilt.1
+        }
         didAttemptLoad = true
     }
 }
@@ -210,6 +233,34 @@ struct LibraryItemRow: View {
     @State private var showLabelManager = false
     @State private var showMetadataEditor = false
     @State private var activeNote: ComicNote?
+    @State private var rowCover: NSImage?
+
+    /// Same cache-was-wiped recovery the grid cell does, so switching to list
+    /// view doesn't show a wall of grey rectangles.
+    private func loadRowCover() async {
+        if let path = item.coverThumbnailPath,
+           FileManager.default.fileExists(atPath: path) {
+            rowCover = await Task.detached(priority: .userInitiated) {
+                NSImage(contentsOfFile: path)
+            }.value
+            return
+        }
+
+        let id = item.id
+        let archivePath = item.filePath
+        guard FileManager.default.fileExists(atPath: archivePath) else { return }
+
+        let rebuilt = await Task.detached(priority: .utility) { () -> (String, NSImage)? in
+            guard let url = try? ThumbnailGenerator.thumbnail(for: id, archivePath: archivePath),
+                  let image = NSImage(contentsOfFile: url.path) else { return nil }
+            return (url.path, image)
+        }.value
+
+        if let rebuilt {
+            item.coverThumbnailPath = rebuilt.0
+            rowCover = rebuilt.1
+        }
+    }
 
     private var rowLabels: [ComicLabel] {
         let ids = Set(item.labelIDs)
@@ -221,7 +272,7 @@ struct LibraryItemRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Group {
-                if let path = item.coverThumbnailPath, let image = NSImage(contentsOfFile: path) {
+                if let image = rowCover {
                     Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
                 } else {
                     RoundedRectangle(cornerRadius: 3).fill(CGTheme.surface0)
@@ -286,6 +337,7 @@ struct LibraryItemRow: View {
                 .fill(isHovering ? CGTheme.surface0.opacity(0.55) : .clear)
         }
         .onHover { isHovering = $0 }
+        .task(id: item.coverThumbnailPath) { await loadRowCover() }
         .contextMenu { ItemContextMenu(item: item, allItems: allItems,
                                        showEditSheet: $showEditSheet,
                                        showRemoveConfirm: $showRemoveConfirm,
@@ -494,7 +546,8 @@ func removeFromLibraryOnly(_ item: LibraryItem, context: ModelContext) {
         path: item.filePath, title: item.title, seriesName: item.seriesName
     )
     context.insert(ignored)
-    if let progress = item.progress { context.delete(progress) }
+    // Reading progress cascades off LibraryItem. Deleting it here first would
+    // leave the cascade firing on an object that no longer exists.
     context.delete(item)
     try? context.save()
 }
@@ -503,7 +556,6 @@ func removeFromLibraryOnly(_ item: LibraryItem, context: ModelContext) {
 func removeFromLibrary(_ item: LibraryItem, context: ModelContext) {
     let url = URL(fileURLWithPath: item.filePath)
     try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
-    if let progress = item.progress { context.delete(progress) }
     context.delete(item)
     try? context.save()
 }

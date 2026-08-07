@@ -558,13 +558,34 @@ struct SettingsView: View {
 
     /// Removing a library drops its items from the app. Files are untouched.
     private func remove(_ library: ComicLibrary) {
-        let items = ((try? context.fetch(FetchDescriptor<LibraryItem>())) ?? [])
-            .filter { $0.libraryID == library.id }
-        for item in items {
-            if let progress = item.progress { context.delete(progress) }
+        // Capture what's needed before anything is deleted. Reading a property
+        // off `library` after context.delete invalidates the object, and SwiftUI
+        // will happily render this row once more before the query catches up.
+        let targetID = library.id
+
+        let all = ((try? context.fetch(FetchDescriptor<LibraryItem>())) ?? [])
+        let doomed = all.filter { $0.libraryID == targetID }
+        let doomedIDs = Set(doomed.map(\.id))
+
+        // Bookmarks point at comics by id with no relationship behind them, so
+        // nothing removes them automatically.
+        let bookmarks = ((try? context.fetch(FetchDescriptor<Bookmark>())) ?? [])
+        for bookmark in bookmarks where doomedIDs.contains(bookmark.itemID) {
+            context.delete(bookmark)
+        }
+
+        // Reading progress is a cascade delete on LibraryItem. Deleting it by
+        // hand and then deleting the comic makes the cascade fire on an object
+        // that is already gone — survivable for one comic, fatal across a whole
+        // library. Let the cascade do its job.
+        for item in doomed {
             context.delete(item)
         }
-        // Don't leave a hidden-flag behind for an id that no longer exists.
+
+        for id in doomedIDs {
+            try? FileManager.default.removeItem(at: ThumbnailGenerator.cachedPath(for: id))
+        }
+
         setHidden(false, for: library)
         context.delete(library)
         try? context.save()
