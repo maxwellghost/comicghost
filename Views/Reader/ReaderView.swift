@@ -437,6 +437,12 @@ struct ReaderView: View {
         .onDisappear {
             hideTask?.cancel()
             stopSleepPrevention()
+            // Formats that unpack to disk leave every page behind otherwise.
+            // Reopening re-extracts, which is the trade for not accumulating
+            // gigabytes of pages from comics read once.
+            ArchiveSupport.discardWorkingDirectory(
+                for: URL(fileURLWithPath: item.filePath)
+            )
         }
         .sheet(item: $activeNote) { note in
             NoteEditorSheet(note: note)

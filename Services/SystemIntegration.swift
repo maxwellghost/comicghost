@@ -28,6 +28,13 @@ final class OpenRequests {
 
 /// Bridges AppKit's file-opening callbacks into SwiftUI.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Pages unpacked by a previous run are dead weight, and a crash or force
+        // quit leaves them with nothing to collect them. Nothing is open yet, so
+        // clearing the lot here is safe.
+        ArchiveSupport.purgeWorkingDirectories()
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         Task { @MainActor in
             OpenRequests.shared.enqueue(urls)

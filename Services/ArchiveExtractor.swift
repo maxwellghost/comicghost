@@ -53,12 +53,32 @@ nonisolated enum ArchiveSupport {
         names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
-    static func workingDirectory(for archiveURL: URL) throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
+    /// Where formats that shell out to an external tool unpack their pages.
+    /// Everything under `workingRoot` is disposable and rebuilt on demand.
+    static var workingRoot: URL {
+        FileManager.default.temporaryDirectory
             .appendingPathComponent("ComicGhost", isDirectory: true)
+    }
+
+    static func workingDirectory(for archiveURL: URL) throws -> URL {
+        let dir = workingRoot
             .appendingPathComponent(archiveURL.deletingPathExtension().lastPathComponent, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+
+    /// Throws away one archive's unpacked pages. A 900-page omnibus is well over
+    /// a gigabyte on disk, so leaving these behind is not a rounding error.
+    static func discardWorkingDirectory(for archiveURL: URL) {
+        guard let dir = try? workingDirectory(for: archiveURL) else { return }
+        try? FileManager.default.removeItem(at: dir)
+    }
+
+    /// Clears everything unpacked by a previous run. Called at launch, since a
+    /// crash or force quit strands pages that nothing else will ever collect.
+    /// Safe unconditionally at that point: nothing is open yet.
+    static func purgeWorkingDirectories() {
+        try? FileManager.default.removeItem(at: workingRoot)
     }
 
     /// How many loose images a folder needs before it counts as a comic.
@@ -282,10 +302,13 @@ nonisolated struct BSDTarExtractor: ArchiveExtractor {
         guard let first = try listImageNames(in: archiveURL).first else {
             throw ArchiveError.emptyArchive
         }
-        // Extract just the one entry to a scratch dir.
+        // Extract just the one entry to a scratch dir. It belongs to this call
+        // alone, so it goes away on the way out rather than waiting for launch.
+        // The parent is left alone — an open reader may be using it.
         let scratch = try ArchiveSupport.workingDirectory(for: archiveURL)
             .appendingPathComponent("__cover", isDirectory: true)
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
 
         guard ArchiveSupport.run(
             tar, ["-xf", archiveURL.path, "-C", scratch.path, first]
