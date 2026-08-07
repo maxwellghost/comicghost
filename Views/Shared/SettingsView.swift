@@ -546,6 +546,14 @@ struct SettingsView: View {
                 return
             }
 
+            // Adding a folder means wanting what is in it. Comics removed from
+            // an earlier library are remembered by path so rescans keep skipping
+            // them, which would otherwise make a freshly added folder come up
+            // short or empty with nothing on screen explaining why. Choosing the
+            // folder is explicit enough to override that; ordinary rescans still
+            // honour the ignore list.
+            let restored = forgetIgnoredFiles(under: url)
+
             let library = ComicLibrary(
                 name: url.lastPathComponent,
                 path: url.path,
@@ -555,14 +563,39 @@ struct SettingsView: View {
             context.insert(library)
             try? context.save()
 
-            libraryMessage = "Scanning \(library.name)…"
+            let name = library.name
+            libraryMessage = "Scanning \(name)…"
             Task {
                 await LibraryIngest.shared.sync(library: library, context: context)
-                libraryMessage = "Added \(library.name)."
+                if restored > 0 {
+                    let noun = restored == 1 ? "comic" : "comics"
+                    libraryMessage = "Added \(name), including \(restored) previously removed \(noun)."
+                } else {
+                    libraryMessage = "Added \(name)."
+                }
                 try? await Task.sleep(for: .seconds(3))
                 libraryMessage = nil
             }
         }
+    }
+
+    /// Drops ignore records for anything inside `folder`. Comics removed from
+    /// the library are remembered by path, with no reference to the library they
+    /// came from, so those records outlive the library itself and would keep a
+    /// re-added folder from loading. Returns how many were forgotten.
+    @MainActor
+    private func forgetIgnoredFiles(under folder: URL) -> Int {
+        let root = folder.standardizedFileURL.path
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+
+        let ignored = ((try? context.fetch(FetchDescriptor<IgnoredFile>())) ?? [])
+        let inside = ignored.filter {
+            URL(fileURLWithPath: $0.path).standardizedFileURL.path.hasPrefix(prefix)
+        }
+        for entry in inside {
+            context.delete(entry)
+        }
+        return inside.count
     }
 
     /// Removing a library drops its items from the app. Files are untouched.
