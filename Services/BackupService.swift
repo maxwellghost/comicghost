@@ -28,6 +28,11 @@ enum BackupService {
         /// Retained so backups written before umbrella folders were removed
         /// still decode. Nothing reads it now.
         var masterSeries: String?
+        /// The sidebar tree is built from these two, so leaving them out of a
+        /// backup meant every publisher and franchise assignment was silently
+        /// lost on restore. Optional so older backups still decode.
+        var publisherName: String?
+        var seriesGroupName: String?
         var isSpecial: Bool
         var isFavorite: Bool
         var isMetadataLocked: Bool
@@ -96,6 +101,8 @@ enum BackupService {
                 seriesName: item.seriesName,
                 issueNumber: item.issueNumber,
                 masterSeries: nil,
+                publisherName: item.publisherName,
+                seriesGroupName: item.seriesGroupName,
                 isSpecial: item.isSpecial,
                 isFavorite: item.isFavorite,
                 isMetadataLocked: item.isMetadataLocked,
@@ -186,6 +193,8 @@ enum BackupService {
             item.title = record.title
             item.seriesName = record.seriesName
             item.issueNumber = record.issueNumber
+            item.publisherName = record.publisherName
+            item.seriesGroupName = record.seriesGroupName
             item.isSpecial = record.isSpecial
             item.isFavorite = record.isFavorite
             item.isMetadataLocked = record.isMetadataLocked
