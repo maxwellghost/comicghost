@@ -546,8 +546,10 @@ func removeFromLibraryOnly(_ item: LibraryItem, context: ModelContext) {
         path: item.filePath, title: item.title, seriesName: item.seriesName
     )
     context.insert(ignored)
-    // Reading progress cascades off LibraryItem. Deleting it here first would
-    // leave the cascade firing on an object that no longer exists.
+    // Reading progress cascades off LibraryItem, and saving snapshots whatever
+    // the cascade drags in. An unread progress row is still a fault, which
+    // SwiftData traps on instead of snapshotting. Reading a property loads it.
+    _ = item.progress?.currentPage
     context.delete(item)
     try? context.save()
 }
@@ -556,6 +558,8 @@ func removeFromLibraryOnly(_ item: LibraryItem, context: ModelContext) {
 func removeFromLibrary(_ item: LibraryItem, context: ModelContext) {
     let url = URL(fileURLWithPath: item.filePath)
     try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+    // Same cascade fault as removeFromLibraryOnly: load progress before delete.
+    _ = item.progress?.currentPage
     context.delete(item)
     try? context.save()
 }

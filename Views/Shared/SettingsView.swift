@@ -574,10 +574,17 @@ struct SettingsView: View {
             context.delete(bookmark)
         }
 
-        // Reading progress is a cascade delete on LibraryItem. Deleting it by
-        // hand and then deleting the comic makes the cascade fire on an object
-        // that is already gone — survivable for one comic, fatal across a whole
-        // library. Let the cascade do its job.
+        // Reading progress cascades off LibraryItem, so saving snapshots every
+        // progress row the deletes drag in. A row that was never read is still
+        // a fault — SwiftData calls that backing a future and traps on it
+        // rather than snapshotting it. One fetch pulls them all in up front,
+        // then touching each relationship resolves to the loaded instance
+        // instead of firing 1400 separate faults.
+        _ = (try? context.fetch(FetchDescriptor<ReadingProgress>())) ?? []
+        for item in doomed {
+            _ = item.progress?.currentPage
+        }
+
         for item in doomed {
             context.delete(item)
         }
