@@ -31,29 +31,22 @@ nonisolated enum ThumbnailGenerator {
         return cached
     }
 
-    /// Rebuilds the thumbnail from a specific page.
+    /// Rebuilds the thumbnail from a page the caller already has on disk.
     ///
-    /// Unlike the fast path above this does unpack the archive, so it's only
-    /// ever driven by an explicit "use this page as the cover" action.
+    /// Driven by the "use this page as the cover" action in the reader, which
+    /// has the whole comic unpacked already. Taking the page from the caller
+    /// avoids unpacking the archive a second time — on a long collection that
+    /// is over a gigabyte of pointless work — and means nothing here writes to
+    /// the shared unpack directory the open reader is reading from.
     static func regenerate(for itemID: UUID,
-                           archivePath: String,
-                           pageIndex: Int,
+                           from pageURL: URL,
                            maxDimension: CGFloat = 500) throws -> URL {
         let cached = cachedPath(for: itemID)
         try? FileManager.default.removeItem(at: cached)
 
-        let archiveURL = URL(fileURLWithPath: archivePath)
-        let extractor = try ArchiveExtractorRouter.extractor(for: archiveURL)
-
-        let data: Data
-        if pageIndex <= 0 {
-            data = try extractor.coverImageData(from: archiveURL)
-        } else {
-            let pages = try extractor.extractPages(from: archiveURL)
-            guard pages.indices.contains(pageIndex) else {
-                throw ArchiveError.extractionFailed("Page \(pageIndex + 1) isn't in this file")
-            }
-            data = try Data(contentsOf: pages[pageIndex].imageURL)
+        let data = try Data(contentsOf: pageURL)
+        guard !data.isEmpty else {
+            throw ArchiveError.extractionFailed("That page couldn't be read")
         }
 
         try downscale(data: data, to: cached, maxDimension: maxDimension)

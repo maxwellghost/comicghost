@@ -1428,14 +1428,22 @@ struct ReaderView: View {
     private func setCoverFromCurrentPage() {
         let page = currentPageIndex
         let id = item.id
-        let path = item.filePath
+
+        // The page is already unpacked and on screen, so hand its file over
+        // rather than making the thumbnailer unpack the archive all over again.
+        guard let pageURL = archive?.pages.first(where: { $0.index == page })?.imageURL else {
+            coverStatus = "Couldn't update the cover"
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                coverStatus = nil
+            }
+            return
+        }
 
         coverStatus = "Updating cover…"
         Task {
             let result = await Task.detached(priority: .userInitiated) { () -> String? in
-                try? ThumbnailGenerator.regenerate(
-                    for: id, archivePath: path, pageIndex: page
-                ).path
+                try? ThumbnailGenerator.regenerate(for: id, from: pageURL).path
             }.value
 
             if let result {
