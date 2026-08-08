@@ -81,6 +81,121 @@ nonisolated enum ArchiveSupport {
         try? FileManager.default.removeItem(at: workingRoot)
     }
 
+    // MARK: - Page cache
+
+    /// Defaults key for the cache ceiling, in bytes. 0 means keep nothing.
+    static let cacheLimitKey = "unpackedPageCacheLimit"
+    static let defaultCacheLimit = 5_000_000_000
+
+    /// The archive the reader currently has open, if any.
+    ///
+    /// Eviction runs from the reader closing, from launch, and from Settings,
+    /// none of which otherwise know what is on screen. Deleting the pages of an
+    /// open comic would break it mid-read, so every eviction path consults this
+    /// and skips that one directory.
+    private static let openLock = NSLock()
+    nonisolated(unsafe) private static var openArchiveURL: URL?
+
+    static func markOpen(_ url: URL?) {
+        openLock.lock()
+        defer { openLock.unlock() }
+        openArchiveURL = url
+    }
+
+    static var currentlyOpenArchive: URL? {
+        openLock.lock()
+        defer { openLock.unlock() }
+        return openArchiveURL
+    }
+
+    /// A missing value means the setting was never touched, which is the
+    /// default — reading it as a plain integer would give 0, "keep nothing".
+    static var cacheLimit: Int64 {
+        let stored = UserDefaults.standard.object(forKey: cacheLimitKey) as? NSNumber
+        return stored?.int64Value ?? Int64(defaultCacheLimit)
+    }
+
+    /// Marks an archive's pages as just used, so eviction sorts by real reading
+    /// order rather than by when the files happened to be written.
+    static func touchWorkingDirectory(for archiveURL: URL) {
+        guard let dir = try? workingDirectory(for: archiveURL) else { return }
+        try? FileManager.default.setAttributes(
+            [.modificationDate: Date()], ofItemAtPath: dir.path
+        )
+    }
+
+    /// Trims the unpacked-page cache to `cacheLimit`, dropping least recently
+    /// used comics first.
+    ///
+    /// Extraction unpacks an entire archive before the first page draws, and
+    /// `extractPages` skips any page already on disk — so these directories are
+    /// what makes reopening a comic instant instead of a fresh multi-gigabyte
+    /// unpack. Discarding them on close cost 10-20 seconds on every open of a
+    /// large omnibus, which is why the reader keeps them now and this bounds
+    /// the total instead.
+    ///
+    /// `keeping` is the archive the reader currently has open. Deleting pages
+    /// out from under it would break the open comic, so it is never evicted
+    /// regardless of size or age.
+    static func enforceCacheLimit(keeping openArchive: URL? = currentlyOpenArchive) {
+        trim(to: cacheLimit, keeping: openArchive)
+    }
+
+    /// Drops every unpacked comic except the one being read.
+    static func evictAll(keeping openArchive: URL? = currentlyOpenArchive) {
+        trim(to: 0, keeping: openArchive)
+    }
+
+    private static func trim(to limit: Int64, keeping openArchive: URL?) {
+        let fm = FileManager.default
+
+        guard let entries = try? fm.contentsOfDirectory(
+            at: workingRoot,
+            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        let protectedPath = openArchive.flatMap { try? workingDirectory(for: $0) }?.standardizedFileURL.path
+
+        var candidates: [(url: URL, size: Int64, used: Date)] = []
+        var total: Int64 = 0
+
+        for entry in entries {
+            guard (try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
+            let size = directorySize(of: entry)
+            total += size
+            guard entry.standardizedFileURL.path != protectedPath else { continue }
+            let used = (try? entry.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            candidates.append((entry, size, used))
+        }
+
+        guard total > limit else { return }
+
+        // Oldest first, so the comic read longest ago goes before a recent one.
+        for candidate in candidates.sorted(by: { $0.used < $1.used }) {
+            guard total > limit else { break }
+            try? fm.removeItem(at: candidate.url)
+            total -= candidate.size
+        }
+    }
+
+    static func directorySize(of directory: URL) -> Int64 {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .fileSizeKey]
+        ) else { return 0 }
+
+        var total: Int64 = 0
+        for case let url as URL in enumerator {
+            let values = try? url.resourceValues(
+                forKeys: [.totalFileAllocatedSizeKey, .fileSizeKey]
+            )
+            let bytes = values?.totalFileAllocatedSize ?? values?.fileSize ?? 0
+            total += Int64(bytes)
+        }
+        return total
+    }
+
     /// How many loose images a folder needs before it counts as a comic.
     /// Low enough for short one-shots, high enough that a stray cover image
     /// in a series folder doesn't create a phantom entry.

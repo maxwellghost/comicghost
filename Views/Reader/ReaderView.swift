@@ -433,16 +433,24 @@ struct ReaderView: View {
             loadNotes()
             wakeChrome()
             startSleepPrevention()
+            // Protects this comic's unpacked pages from eviction while it is
+            // on screen, whether that is triggered from Settings or a launch.
+            ArchiveSupport.markOpen(URL(fileURLWithPath: item.filePath))
         }
         .onDisappear {
             hideTask?.cancel()
             stopSleepPrevention()
-            // Formats that unpack to disk leave every page behind otherwise.
-            // Reopening re-extracts, which is the trade for not accumulating
-            // gigabytes of pages from comics read once.
-            ArchiveSupport.discardWorkingDirectory(
-                for: URL(fileURLWithPath: item.filePath)
-            )
+            // Pages stay on disk deliberately. Opening a comic unpacks the whole
+            // archive before the first page draws, so throwing them away here
+            // meant every reopen paid a full multi-gigabyte unpack again — 10-20
+            // seconds on an omnibus. Instead the cache is trimmed to its ceiling,
+            // oldest comic first, off the main thread so closing stays instant.
+            let archive = URL(fileURLWithPath: item.filePath)
+            ArchiveSupport.touchWorkingDirectory(for: archive)
+            ArchiveSupport.markOpen(nil)
+            Task.detached(priority: .utility) {
+                ArchiveSupport.enforceCacheLimit()
+            }
         }
         .sheet(item: $activeNote) { note in
             NoteEditorSheet(note: note)

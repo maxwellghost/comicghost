@@ -25,6 +25,8 @@ struct SettingsView: View {
     @State private var libraryMessage: String?
     @State private var removalProgress: Double?
     @AppStorage(UpdateChecker.enabledKey) private var checkForUpdates: Bool = false
+    @AppStorage(ArchiveSupport.cacheLimitKey) private var pageCacheLimit: Int = ArchiveSupport.defaultCacheLimit
+    @State private var cacheBytes: Int64 = 0
     private let updates = UpdateChecker.shared
     @State private var expandedThemeFamilies: Set<String> = []
     /// The whole theme list folds away — the label shows what's active, which
@@ -317,6 +319,33 @@ struct SettingsView: View {
                 }
                 .toggleStyle(.switch)
                 .tint(accent)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker("Keep unpacked pages", selection: $pageCacheLimit) {
+                        Text("Don't keep any").tag(0)
+                        Text("Up to 2 GB").tag(2_000_000_000)
+                        Text("Up to 5 GB").tag(5_000_000_000)
+                        Text("Up to 10 GB").tag(10_000_000_000)
+                        Text("Up to 20 GB").tag(20_000_000_000)
+                    }
+                    Text("Opening a comic unpacks it to a temporary folder. Keeping those pages makes reopening instant instead of unpacking again, which takes 10-20 seconds on a large omnibus. The comic you have open is never removed; past that, the least recently read go first.")
+                        .font(.caption)
+                        .foregroundStyle(CGTheme.subtext0)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        Text(cacheUsageLabel)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(CGTheme.subtext1)
+                        Spacer()
+                        Button("Clear Now") { clearPageCache() }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                    }
+                }
+                .onChange(of: pageCacheLimit) { _, _ in
+                    Task.detached(priority: .utility) { ArchiveSupport.enforceCacheLimit() }
+                }
+                .task { refreshCacheUsage() }
             }
             Section("Backup") {
                 Text("Reading progress, ratings, favorites, labels, bookmarks, and collections live only in this app — not in your comic files. Export keeps a copy.")
@@ -719,6 +748,29 @@ struct SettingsView: View {
         try? context.save()
 
         return doomedIDs
+    }
+
+    private var cacheUsageLabel: String {
+        cacheBytes == 0
+            ? "Nothing unpacked right now"
+            : "\(ByteCountFormatter.string(fromByteCount: cacheBytes, countStyle: .file)) unpacked"
+    }
+
+    private func refreshCacheUsage() {
+        Task.detached(priority: .utility) {
+            let bytes = ArchiveSupport.directorySize(of: ArchiveSupport.workingRoot)
+            await MainActor.run { cacheBytes = bytes }
+        }
+    }
+
+    /// Clearing while a comic is open would delete the pages it is displaying,
+    /// so this drops everything the reader is not currently using.
+    private func clearPageCache() {
+        Task.detached(priority: .utility) {
+            ArchiveSupport.evictAll()
+            let bytes = ArchiveSupport.directorySize(of: ArchiveSupport.workingRoot)
+            await MainActor.run { cacheBytes = bytes }
+        }
     }
 
     /// Thumbnail files are plain filesystem work with no model involved, so this

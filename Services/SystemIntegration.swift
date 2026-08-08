@@ -29,10 +29,14 @@ final class OpenRequests {
 /// Bridges AppKit's file-opening callbacks into SwiftUI.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Pages unpacked by a previous run are dead weight, and a crash or force
-        // quit leaves them with nothing to collect them. Nothing is open yet, so
-        // clearing the lot here is safe.
-        ArchiveSupport.purgeWorkingDirectories()
+        // Pages unpacked by a previous run are kept, not dumped: reopening a
+        // comic you were part-way through is the common case, and re-unpacking
+        // an omnibus costs 10-20 seconds. Trim to the ceiling instead, which
+        // also collects whatever a crash or force quit stranded. Nothing is
+        // open yet, so nothing here can be evicted out from under a reader.
+        Task.detached(priority: .utility) {
+            ArchiveSupport.enforceCacheLimit()
+        }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
