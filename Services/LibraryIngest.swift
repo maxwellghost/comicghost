@@ -204,7 +204,14 @@ final class LibraryIngest {
         let existing = ((try? context.fetch(FetchDescriptor<LibraryItem>())) ?? [])
             .filter { $0.libraryID == libraryID && $0.filePath.hasPrefix(scopePath) }
 
+        // Reading progress cascades off LibraryItem, and the save below
+        // snapshots every progress row the deletes drag in. A row never read
+        // from disk is still a fault, which SwiftData traps on instead of
+        // snapshotting. Touching the relationship loads it first. This runs at
+        // every launch, so missing it meant one moved file crashed the app on
+        // startup with no way back in.
         for item in existing where !diskPaths.contains(item.filePath) {
+            _ = item.progress?.currentPage
             context.delete(item)
         }
 
