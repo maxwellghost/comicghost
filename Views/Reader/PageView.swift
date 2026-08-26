@@ -376,13 +376,13 @@ struct PageView: View {
         containerSize = container
         refreshMetrics(in: container)
 
-        if fitMode == .width {
-            // Start at the top of the page.
-            let maxY = max((contentSize.height - container.height) / 2, 0)
-            offset = CGSize(width: 0, height: maxY)
-        } else {
-            offset = .zero
-        }
+        // Start at the top of the page whenever there is a top to start at.
+        // `offset = .zero` centres the content, which is the same thing only
+        // while the page fits the window — zoomed in, or in fit-width, it drops
+        // you into the middle of the page and you have to scroll back up on
+        // every turn. When the content does fit, maxY is 0 and this is centred.
+        let maxY = max((contentSize.height - container.height) / 2, 0)
+        offset = CGSize(width: 0, height: maxY)
         committedOffset = offset
     }
 }
