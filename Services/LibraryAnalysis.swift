@@ -224,6 +224,19 @@ final class LibraryAnalysis {
     /// skip files already in the library — and the grid only rebuilds a cover
     /// for a cell it happens to draw, so anything never scrolled past stays
     /// blank. This is the deliberate sweep.
+    /// True when the thumbnail cache has been emptied rather than merely
+    /// being incomplete.
+    ///
+    /// Importing generates a thumbnail per comic, so a populated library with
+    /// an empty cache directory means something outside the app deleted it —
+    /// macOS under storage pressure, or a cleanup utility. One missing cover is
+    /// just a cover the grid has not drawn yet; all of them missing is a wipe.
+    static var cacheLooksWiped: Bool {
+        let dir = ThumbnailGenerator.cacheDirectory
+        let contents = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return contents.isEmpty
+    }
+
     func rebuildMissingCovers(for items: [LibraryItem], context: ModelContext) async {
         guard !isScanning else { return }
         isScanning = true

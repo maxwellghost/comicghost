@@ -305,6 +305,13 @@ struct LibraryView: View {
         .task {
             ingest.migrateLegacyFolderIfNeeded(context: context)
             await ingest.syncAll(context: context)
+            // A cleanup tool emptying the cache used to mean blank covers until
+            // each comic was scrolled past, or Library Tools was run by hand.
+            // Runs after the scan because rebuildMissingCovers bails while
+            // another scan holds isScanning.
+            if LibraryAnalysis.cacheLooksWiped, !items.isEmpty {
+                await LibraryAnalysis.shared.rebuildMissingCovers(for: items, context: context)
+            }
         }
         .sheet(item: $renameTarget) { series in
             SeriesRenameSheet(series: series) { newName in applyRename(series, to: newName) }
