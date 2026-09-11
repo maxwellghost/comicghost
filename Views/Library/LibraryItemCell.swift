@@ -705,7 +705,12 @@ struct CoverImage<Unavailable: View>: View {
         }.value
 
         if let rebuilt {
-            item.coverThumbnailPath = rebuilt.0
+            // Same reason as the bulk rebuild: the path is almost always
+            // identical, and writing it anyway churns every view watching the
+            // library.
+            if item.coverThumbnailPath != rebuilt.0 {
+                item.coverThumbnailPath = rebuilt.0
+            }
             cover = rebuilt.1
         }
         didAttemptLoad = true

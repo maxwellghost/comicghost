@@ -274,7 +274,14 @@ final class LibraryAnalysis {
             }.value
 
             if let generated {
-                item.coverThumbnailPath = generated
+                // Thumbnail paths are derived from the item id, so a rebuilt
+                // cover lands on the path it already had. Assigning anyway
+                // still dirties the model, republishes every @Query watching
+                // it, and re-evaluates the toolbar — 25 times in a row, which
+                // made the window toolbar animate itself in over and over.
+                if item.coverThumbnailPath != generated {
+                    item.coverThumbnailPath = generated
+                }
                 rebuilt += 1
             } else {
                 failed += 1
