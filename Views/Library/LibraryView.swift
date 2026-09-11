@@ -1066,12 +1066,8 @@ struct LibraryView: View {
 
     private func queueRow(_ item: LibraryItem) -> some View {
         HStack(spacing: 12) {
-            Group {
-                if let path = item.coverThumbnailPath, let image = NSImage(contentsOfFile: path) {
-                    Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-                } else {
-                    RoundedRectangle(cornerRadius: 4).fill(CGTheme.surface0)
-                }
+            CoverImage(item: item, cornerRadius: 4) {
+                RoundedRectangle(cornerRadius: 4).fill(CGTheme.surface0)
             }
             .frame(width: 44, height: 62)
             .clipShape(RoundedRectangle(cornerRadius: 4))
@@ -1128,7 +1124,7 @@ struct LibraryView: View {
     private var backdropPath: String? {
         if case .series(let name) = route,
            let series = allSeries.first(where: { $0.name == name }) {
-            return series.coverPath
+            return series.coverItem?.coverThumbnailPath
         }
         return filteredItems.first?.coverThumbnailPath ?? items.first?.coverThumbnailPath
     }
@@ -1220,12 +1216,13 @@ struct LibraryView: View {
             withAnimation(.easeInOut(duration: 0.3)) { openedItem = item }
         } label: {
             VStack(alignment: .leading, spacing: 6) {
-                Group {
-                    if let path = item.coverThumbnailPath, let image = NSImage(contentsOfFile: path) {
-                        Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-                    } else {
-                        SkeletonBox(cornerRadius: 6)
-                    }
+                CoverImage(item: item, cornerRadius: 6) {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(CGTheme.surface0)
+                        .overlay {
+                            Image(systemName: "book.closed")
+                                .foregroundStyle(CGTheme.subtext0)
+                        }
                 }
                 .frame(width: 110, height: 150)
                 .clipShape(RoundedRectangle(cornerRadius: 6))

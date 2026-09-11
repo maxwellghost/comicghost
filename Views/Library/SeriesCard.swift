@@ -190,20 +190,24 @@ struct SeriesCard: View {
             .offset(x: offset, y: -offset / 2)
     }
 
+    private var seriesPlaceholder: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(CGTheme.surface0)
+            .overlay {
+                Image(systemName: "books.vertical")
+                    .font(.largeTitle)
+                    .foregroundStyle(CGTheme.subtext0)
+            }
+    }
+
     private var coverImage: some View {
         Group {
-            if let path = series.coverPath, let image = NSImage(contentsOfFile: path) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
+            if let coverItem = series.coverItem {
+                CoverImage(item: coverItem, cornerRadius: 8) {
+                    seriesPlaceholder
+                }
             } else {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(CGTheme.surface0)
-                    .overlay {
-                        Image(systemName: "books.vertical")
-                            .font(.largeTitle)
-                            .foregroundStyle(CGTheme.subtext0)
-                    }
+                seriesPlaceholder
             }
         }
         .frame(minHeight: 200)
@@ -224,13 +228,16 @@ struct Series: Identifiable {
 
     /// Cover comes from the earliest issue of the main run (issue 1 / volume 1),
     /// falling back to specials only if there's nothing else.
-    var coverPath: String? {
+    var coverItem: LibraryItem? {
         let ordered = items
             .sorted {
                 if $0.isSpecial != $1.isSpecial { return !$0.isSpecial }
                 return $0.title.localizedStandardCompare($1.title) == .orderedAscending
             }
-        return ordered.first(where: { $0.coverThumbnailPath != nil })?.coverThumbnailPath
+        // Whichever issue leads the run. Its thumbnail may be missing, which is
+        // fine — CoverImage regenerates it. Picking by "has a path" instead let
+        // a stale path on the first issue hide a good cover on the second.
+        return ordered.first
     }
 
     var readCount: Int {

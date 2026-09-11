@@ -14,20 +14,10 @@ struct LibraryItemCell: View {
     @State private var isHovering = false
     @State private var showEditSheet = false
     @State private var showRemoveConfirm = false
-    @State private var cover: NSImage?
-    @State private var didAttemptLoad = false
     @State private var showLabelManager = false
     @State private var showMetadataEditor = false
     @State private var activeNote: ComicNote?
-    @State private var analysis = LibraryAnalysis.shared
-
     private var accent: Color { CGAccent(rawValue: accentRaw)?.color ?? CGTheme.mauve }
-
-    /// Reloads when the cover path changes, and when a Library Tools rebuild
-    /// replaces the file under a path that stayed the same.
-    private var coverTaskID: String {
-        "\(item.coverThumbnailPath ?? "")#\(analysis.coverGeneration)"
-    }
 
     private var attachedLabels: [ComicLabel] {
         let ids = Set(item.labelIDs)
@@ -92,26 +82,17 @@ struct LibraryItemCell: View {
         } message: {
             Text("Removing from the library leaves the file where it is and stops future scans picking it up. Moving to the Trash deletes it from disk.")
         }
-        .task(id: coverTaskID) { await loadCover() }
     }
 
     private var coverArea: some View {
-        Group {
-            if let cover {
-                Image(nsImage: cover)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else if didAttemptLoad {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(CGTheme.surface0)
-                    .overlay {
-                        Image(systemName: "book.closed")
-                            .font(.largeTitle)
-                            .foregroundStyle(CGTheme.subtext0)
-                    }
-            } else {
-                SkeletonBox(cornerRadius: 8)
-            }
+        CoverImage(item: item, cornerRadius: 8) {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(CGTheme.surface0)
+                .overlay {
+                    Image(systemName: "book.closed")
+                        .font(.largeTitle)
+                        .foregroundStyle(CGTheme.subtext0)
+                }
         }
         .frame(height: coverHeight)
         .frame(maxWidth: .infinity)
@@ -190,40 +171,6 @@ struct LibraryItemCell: View {
             .shadow(color: CGTheme.crust.opacity(0.6), radius: 1, y: 0.5)
     }
 
-    private func loadCover() async {
-        // Fast path: the thumbnail is where we left it.
-        if let path = item.coverThumbnailPath,
-           FileManager.default.fileExists(atPath: path) {
-            cover = await Task.detached(priority: .userInitiated) {
-                NSImage(contentsOfFile: path)
-            }.value
-            didAttemptLoad = true
-            return
-        }
-
-        // Thumbnails live in ~/Library/Caches, which macOS and every cleanup
-        // utility are free to empty. Rescanning won't bring them back, because
-        // the comic is already in the library and gets skipped, so the cover
-        // would stay blank forever. Rebuild it here instead.
-        let id = item.id
-        let archivePath = item.filePath
-        guard FileManager.default.fileExists(atPath: archivePath) else {
-            didAttemptLoad = true
-            return
-        }
-
-        let rebuilt = await Task.detached(priority: .utility) { () -> (String, NSImage)? in
-            guard let url = try? ThumbnailGenerator.thumbnail(for: id, archivePath: archivePath),
-                  let image = NSImage(contentsOfFile: url.path) else { return nil }
-            return (url.path, image)
-        }.value
-
-        if let rebuilt {
-            item.coverThumbnailPath = rebuilt.0
-            cover = rebuilt.1
-        }
-        didAttemptLoad = true
-    }
 }
 
 /// Compact row for list view.
@@ -240,39 +187,6 @@ struct LibraryItemRow: View {
     @State private var showLabelManager = false
     @State private var showMetadataEditor = false
     @State private var activeNote: ComicNote?
-    @State private var rowCover: NSImage?
-    @State private var analysis = LibraryAnalysis.shared
-
-    private var coverTaskID: String {
-        "\(item.coverThumbnailPath ?? "")#\(analysis.coverGeneration)"
-    }
-
-    /// Same cache-was-wiped recovery the grid cell does, so switching to list
-    /// view doesn't show a wall of grey rectangles.
-    private func loadRowCover() async {
-        if let path = item.coverThumbnailPath,
-           FileManager.default.fileExists(atPath: path) {
-            rowCover = await Task.detached(priority: .userInitiated) {
-                NSImage(contentsOfFile: path)
-            }.value
-            return
-        }
-
-        let id = item.id
-        let archivePath = item.filePath
-        guard FileManager.default.fileExists(atPath: archivePath) else { return }
-
-        let rebuilt = await Task.detached(priority: .utility) { () -> (String, NSImage)? in
-            guard let url = try? ThumbnailGenerator.thumbnail(for: id, archivePath: archivePath),
-                  let image = NSImage(contentsOfFile: url.path) else { return nil }
-            return (url.path, image)
-        }.value
-
-        if let rebuilt {
-            item.coverThumbnailPath = rebuilt.0
-            rowCover = rebuilt.1
-        }
-    }
 
     private var rowLabels: [ComicLabel] {
         let ids = Set(item.labelIDs)
@@ -283,12 +197,8 @@ struct LibraryItemRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Group {
-                if let image = rowCover {
-                    Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-                } else {
-                    RoundedRectangle(cornerRadius: 3).fill(CGTheme.surface0)
-                }
+            CoverImage(item: item, cornerRadius: 3) {
+                RoundedRectangle(cornerRadius: 3).fill(CGTheme.surface0)
             }
             .frame(width: 32, height: 46)
             .clipShape(RoundedRectangle(cornerRadius: 3))
@@ -349,7 +259,6 @@ struct LibraryItemRow: View {
                 .fill(isHovering ? CGTheme.surface0.opacity(0.55) : .clear)
         }
         .onHover { isHovering = $0 }
-        .task(id: coverTaskID) { await loadRowCover() }
         .contextMenu { ItemContextMenu(item: item, allItems: allItems,
                                        showEditSheet: $showEditSheet,
                                        showRemoveConfirm: $showRemoveConfirm,
@@ -724,5 +633,81 @@ struct EditInfoSheet: View {
         item.rating = rating
         item.isMetadataLocked = true
         dismiss()
+    }
+}
+
+/// One cover thumbnail: read off the main thread, and regenerated from the
+/// archive when the cached file has gone.
+///
+/// Every cover in the app draws through this. Before it existed, the rebuild
+/// lived only in the grid cell, so a wiped thumbnail cache left the shelves and
+/// series cards blank until Library Tools was run by hand. Worse, the Continue
+/// reading shelf used the loading skeleton as its missing-file state, so a
+/// cover that was never coming animated forever.
+///
+/// `unavailable` is the genuinely-no-cover state, distinct from the skeleton,
+/// which now only ever means still loading.
+struct CoverImage<Unavailable: View>: View {
+    let item: LibraryItem
+    var cornerRadius: CGFloat = 8
+    @ViewBuilder var unavailable: () -> Unavailable
+
+    @State private var cover: NSImage?
+    @State private var didAttemptLoad = false
+    @State private var analysis = LibraryAnalysis.shared
+
+    /// Reloads when the path changes, and when a Library Tools rebuild replaces
+    /// the file under a path that stayed the same.
+    private var taskID: String {
+        "\(item.coverThumbnailPath ?? "")#\(analysis.coverGeneration)"
+    }
+
+    var body: some View {
+        Group {
+            if let cover {
+                Image(nsImage: cover)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else if didAttemptLoad {
+                unavailable()
+            } else {
+                SkeletonBox(cornerRadius: cornerRadius)
+            }
+        }
+        .task(id: taskID) { await load() }
+    }
+
+    private func load() async {
+        // Fast path: the thumbnail is where we left it.
+        if let path = item.coverThumbnailPath,
+           FileManager.default.fileExists(atPath: path) {
+            cover = await Task.detached(priority: .userInitiated) {
+                NSImage(contentsOfFile: path)
+            }.value
+            didAttemptLoad = true
+            return
+        }
+
+        // The cache sits in the container's Caches directory, which macOS and
+        // any cleanup tool empty freely. A rescan will not repair it, because
+        // the comic is already in the library and gets skipped.
+        let id = item.id
+        let archivePath = item.filePath
+        guard FileManager.default.fileExists(atPath: archivePath) else {
+            didAttemptLoad = true
+            return
+        }
+
+        let rebuilt = await Task.detached(priority: .utility) { () -> (String, NSImage)? in
+            guard let url = try? ThumbnailGenerator.thumbnail(for: id, archivePath: archivePath),
+                  let image = NSImage(contentsOfFile: url.path) else { return nil }
+            return (url.path, image)
+        }.value
+
+        if let rebuilt {
+            item.coverThumbnailPath = rebuilt.0
+            cover = rebuilt.1
+        }
+        didAttemptLoad = true
     }
 }
