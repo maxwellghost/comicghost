@@ -31,6 +31,10 @@ struct PageView: View {
     @State private var committedZoom: CGFloat = 1.0
     @State private var offset: CGSize = .zero
     @State private var committedOffset: CGSize = .zero
+    /// Zoom and offset when the current pinch began. Every pinch event scales
+    /// from these, because the trackpad reports magnification cumulatively.
+    @State private var pinchStartZoom: CGFloat?
+    @State private var pinchStartOffset: CGSize = .zero
     @State private var containerSize: CGSize = .zero
     @State private var scrollMonitor: Any?
 
@@ -315,21 +319,48 @@ struct PageView: View {
 
     // MARK: - Gestures
 
-    /// Damped so a small pinch doesn't jump hundreds of percent.
+    /// Pinch zoom, anchored under the fingers.
     ///
-    /// The trackpad reports raw magnification, which on a short pinch can
-    /// already be 2x or more. `pinchDamping` scales how much of that reaches
-    /// the zoom level: 1.0 is raw trackpad behaviour, lower is gentler.
-    /// Turn this down further if it still moves too fast.
-    private static let pinchDamping: CGFloat = 0.18
-
+    /// `value.magnification` is cumulative since the pinch began, so it has to
+    /// multiply the zoom the pinch started at. It used to multiply
+    /// `committedZoom`, which `setZoom` overwrote on every event — so each event
+    /// compounded onto the last, and zoom accelerated the longer a pinch went
+    /// on. A damping factor was hiding that, which is why pinching felt sluggish
+    /// and jumpy at once. Scaling from the start value tracks the fingers 1:1.
+    ///
+    /// The offset is solved so the point under the pinch stays where it is:
+    /// content scales about its centre, so a point `p` from the window centre
+    /// sits at `(p - offset) / scale` in content space, and keeping that fixed
+    /// as the scale changes gives the new offset below.
     private var magnifyGesture: some Gesture {
         MagnifyGesture()
             .onChanged { value in
-                let damped = 1 + (value.magnification - 1) * Self.pinchDamping
-                setZoom(committedZoom * damped)
+                if pinchStartZoom == nil {
+                    pinchStartZoom = zoom
+                    pinchStartOffset = offset
+                }
+                guard let startZoom = pinchStartZoom, startZoom > 0 else { return }
+
+                let target = min(max(startZoom * value.magnification, minZoom), maxZoom)
+                let ratio = target / startZoom
+                let anchor = CGSize(
+                    width: value.startLocation.x - containerSize.width / 2,
+                    height: value.startLocation.y - containerSize.height / 2
+                )
+
+                zoom = target
+                refreshMetrics(in: containerSize)
+                offset = clamp(CGSize(
+                    width: anchor.width - (anchor.width - pinchStartOffset.width) * ratio,
+                    height: anchor.height - (anchor.height - pinchStartOffset.height) * ratio
+                ))
+                committedOffset = offset
             }
-            .onEnded { _ in committedZoom = zoom }
+            .onEnded { _ in
+                pinchStartZoom = nil
+                committedZoom = zoom
+                committedOffset = offset
+            }
     }
 
     private var dragGesture: some Gesture {
