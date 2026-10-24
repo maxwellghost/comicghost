@@ -176,7 +176,6 @@ struct SeriesCard: View {
             }
             coverImage
         }
-        .frame(minHeight: 210)
     }
 
     private func coverLayer(offset: CGFloat, opacity: Double, scale: CGFloat) -> some View {
@@ -200,18 +199,29 @@ struct SeriesCard: View {
             }
     }
 
+    /// The box sets the card's size, never the art.
+    ///
+    /// A fill-mode image reports whatever size it scaled to. With only a
+    /// minimum height on it, a tall cover grew its card and a wide one widened
+    /// it past its grid column, spilling into the neighbours and, centred in the
+    /// column, pushing the first card's title off the leading edge. It went
+    /// unnoticed while the cover was read in the same pass that sized the card;
+    /// once covers loaded in the background, the late size change knocked the
+    /// grid out of alignment. An overlay cannot resize its container, so every
+    /// card is the same 2:3 shape whatever the art, loading or loaded.
     private var coverImage: some View {
-        Group {
-            if let coverItem = series.coverItem {
-                CoverImage(item: coverItem, cornerRadius: 8) {
+        Color.clear
+            .aspectRatio(2.0 / 3.0, contentMode: .fit)
+            .overlay {
+                if let coverItem = series.coverItem {
+                    CoverImage(item: coverItem, cornerRadius: 8) {
+                        seriesPlaceholder
+                    }
+                } else {
                     seriesPlaceholder
                 }
-            } else {
-                seriesPlaceholder
             }
-        }
-        .frame(minHeight: 200)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(isHovering ? accent.opacity(0.6) : CGTheme.surface0, lineWidth: 1)
